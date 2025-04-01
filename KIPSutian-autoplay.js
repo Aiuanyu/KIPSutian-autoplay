@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         教育部臺語辭典 - 自動循序播放音檔 (自動時長+亮暗模式)
 // @namespace    aiuanyu
-// @version      3.0
+// @version      3.2
 // @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放其中的音檔(自動偵測時長)，並根據亮暗模式高亮當前播放按鈕。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        https://sutian.moe.edu.tw/und-hani/tshiau/*
@@ -308,7 +308,7 @@
     if (isProcessing) {
       isPaused = false;
       if (pauseButton) pauseButton.textContent = '暫停';
-      if (startButton) startButton.textContent = '暫停';
+      if (startButton) startButton.textContent = '暫停'; // 開始播放後，「開始」按鈕文字也變「暫停」
       updateStatusDisplay();
       return;
     }
@@ -343,13 +343,16 @@
   }
 
   async function processLinksSequentially(links) {
-    for (let i = 0; i < links.length; i++) {
-      currentLinkIndex = i;
-      if (isPaused || !isProcessing) {
-        console.log(`[自動播放] 處理循環已${isPaused ? '暫停' : '停止'}。`);
-        updateStatusDisplay();
-        break;
+    let i = currentLinkIndex; // 從目前處理的索引繼續
+    while (i < links.length && isProcessing) {
+      if (isPaused) {
+        console.log("[自動播放] 處理循環已暫停，等待繼續...");
+        await sleep(500); // 稍微等一下，避免一直檢查
+        continue; // 跳過這次循環，等待 isPaused 變 false
       }
+
+      currentLinkIndex = i;
+      console.log("[自動播放] processLinksSequentially 循環中，isPaused:", isPaused, "isProcessing:", isProcessing);
       updateStatusDisplay();
       const linkElement = links[i];
       if (linkElement.href) {
@@ -366,15 +369,20 @@
       } else {
         console.warn(`[自動播放] 第 ${i + 1} 個連結元素沒有有效的 href 屬性。`);
       }
+      i++;
     }
-    if (isProcessing) {
+    if (isProcessing && !isPaused) {
+      console.log("[自動播放] processLinksSequentially 結束，isProcessing:", isProcessing);
       console.log("[自動播放] 所有連結攏處理完畢。");
       alert("所有連結攏處理完畢！");
       resetTriggerButton();
+    } else if (!isProcessing) {
+      resetTriggerButton(); // 如果是按停止，也要重置按鈕
     }
   }
 
   function pausePlayback() {
+    console.log("[自動播放] pausePlayback 函數被呼叫"); // 新增日誌
     if (isProcessing) {
       isPaused = !isPaused;
       if (pauseButton) pauseButton.textContent = isPaused ? '繼續' : '暫停';
@@ -451,7 +459,7 @@
     pauseButton.textContent = '暫停';
     pauseButton.style.cssText = buttonStyle;
     pauseButton.style.display = 'none';
-    pauseButton.addEventListener('click', pausePlayback);
+    pauseButton.addEventListener('click', pausePlayback); // 修改這裡
     buttonContainer.appendChild(pauseButton);
 
     stopButton = document.createElement('button');
@@ -485,7 +493,7 @@
   function initialize() {
     if (window.autoPlayerInitialized) return;
     window.autoPlayerInitialized = true;
-    console.log("[自動播放] 初始化腳本 v3.0 ...");
+    console.log("[自動播放] 初始化腳本 v3.1 ...");
     addTriggerButton();
   }
 
