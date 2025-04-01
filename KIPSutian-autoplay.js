@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         教育部臺語辭典 - 自動循序播放音檔 (自動時長+亮暗模式)
 // @namespace    aiuanyu
-// @version      1.7
+// @version      1.8
 // @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放其中的音檔(自動偵測時長)，並根據亮暗模式高亮當前播放按鈕。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        https://sutian.moe.edu.tw/und-hani/tshiau/*
@@ -103,8 +103,6 @@
       audio.addEventListener('error', onError);
 
       try {
-        // 嘗試直接設置 src
-        // 如果遇到 CORS 問題，可能需要 GM_xmlhttpRequest (但通常獲取同源的 metadata 不會有問題)
         audio.src = audioUrl;
       } catch (e) {
         console.error(`[自動播放] 設置音檔 src 時發生錯誤 (${audioUrl}):`, e);
@@ -228,14 +226,10 @@
               let actualDelayMs = FALLBACK_DELAY_MS;
               let audioSrc = null;
               try {
-                // data-src 的內容是 JSON 字串，如 [&quot;/path/to.mp3&quot;]
-                const srcData = JSON.parse(button.dataset.src.replace(/&quot;/g, '"'));
-                if (Array.isArray(srcData) && srcData.length > 0 && typeof srcData[0] === 'string') {
-                  // 構建絕對 URL
-                  audioSrc = new URL(srcData[0], iframe.contentWindow.location.href).href;
-                }
+                // 直接將 data-src 作為 URL (去除 JSON 解析)
+                audioSrc = new URL(button.dataset.src.replace(/&quot;/g, '"'), iframe.contentWindow.location.href).href;
               } catch (parseError) {
-                console.error("[自動播放] 解析 data-src 失敗:", parseError, button.dataset.src);
+                console.error("[自動播放] 處理 data-src 失敗:", parseError, button.dataset.src);
               }
 
               if (audioSrc) {
@@ -394,7 +388,11 @@
 
   // --- 添加觸發按鈕 ---
   function addTriggerButton() {
-    if (document.getElementById('auto-play-trigger-button')) return;
+    console.log("[自動播放] 嘗試添加觸發按鈕..."); // 新增日誌
+    if (document.getElementById('auto-play-trigger-button')) {
+      console.log("[自動播放] 觸發按鈕已存在，跳過。"); // 新增日誌
+      return;
+    }
     const button = document.createElement('button');
     button.id = 'auto-play-trigger-button';
     button.textContent = '開始自動播放表格音檔';
@@ -414,6 +412,7 @@
 
     button.addEventListener('click', startProcessing);
     document.body.appendChild(button);
+    console.log("[自動播放] 觸發按鈕已添加到頁面。"); // 新增日誌
 
     // 添加按鈕禁用樣式
     GM_addStyle(`
@@ -429,7 +428,7 @@
   function initialize() {
     if (window.autoPlayerInitialized) return;
     window.autoPlayerInitialized = true;
-    console.log("[自動播放] 初始化腳本 v1.7 ...");
+    console.log("[自動播放] 初始化腳本 v1.8 ...");
     addTriggerButton();
   }
 
