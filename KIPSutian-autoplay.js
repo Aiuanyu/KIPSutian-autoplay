@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         教育部臺語辭典 - 自動循序播放音檔 (即時暫停/停止)
+// @name         教育部臺語辭典 - 自動循序播放音檔 (修正暫停/解析/遮罩點擊)
 // @namespace    aiuanyu
-// @version      3.3
-// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放其中的音檔(自動偵測時長)，可即時暫停/停止，並根據亮暗模式高亮按鈕。
+// @version      3.4
+// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放其中的音檔(自動偵測時長)，可即時暫停(不關閉Modal)/停止/點擊背景暫停(關閉Modal)，並根據亮暗模式高亮按鈕。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        https://sutian.moe.edu.tw/und-hani/tshiau/*
 // @grant        GM_addStyle
@@ -47,71 +47,66 @@
   // --- 配置結束 ---
 
   // --- 全局狀態變數 ---
-  let isProcessing = false; // 是否正在執行播放流程
-  let isPaused = false;     // 是否處於暫停狀態
-  let currentLinkIndex = 0; // 目前處理到第幾個連結
-  let totalLinks = 0;       // 總共有多少連結
-  let currentSleepController = null; // 當前可中斷的 sleep 控制器
-  let currentIframe = null; // 當前開啟的 iframe 元素
-  let linksToProcess = [];  // 要處理的連結列表
+  let isProcessing = false;
+  let isPaused = false;
+  let currentLinkIndex = 0;
+  let totalLinks = 0;
+  let currentSleepController = null;
+  let currentIframe = null;
+  let linksToProcess = [];
 
   // --- UI 元素引用 ---
   let startButton;
   let pauseButton;
   let stopButton;
   let statusDisplay;
+  let overlayElement = null; // 引用背景遮罩元素
 
   // --- Helper 函數 ---
 
-  // 可中斷的延遲函數
+  // 可中斷的延遲函數 (與 v3.3 相同)
   function interruptibleSleep(ms) {
-    // 如果已有正在進行的 sleep，先取消它 (雖然理論上不應該重疊)
     if (currentSleepController) {
       currentSleepController.cancel('overridden');
     }
-
     let timeoutId;
     let rejectFn;
     let resolved = false;
     let rejected = false;
-
     const promise = new Promise((resolve, reject) => {
-      rejectFn = reject; // 保存 reject 函數以便外部調用 cancel
+      rejectFn = reject;
       timeoutId = setTimeout(() => {
         if (!rejected) {
           resolved = true;
-          currentSleepController = null; // 清除控制器
+          currentSleepController = null;
           resolve();
         }
       }, ms);
     });
-
     const controller = {
       promise: promise,
       cancel: (reason = 'cancelled') => {
         if (!resolved && !rejected) {
           rejected = true;
           clearTimeout(timeoutId);
-          currentSleepController = null; // 清除控制器
-          // 使用一個特定的 Error 類型或屬性來標識取消
+          currentSleepController = null;
           const error = new Error(reason);
           error.isCancellation = true;
           error.reason = reason;
-          rejectFn(error); // 用特定原因 reject promise
+          rejectFn(error);
         }
       }
     };
-
-    currentSleepController = controller; // 保存當前控制器
+    currentSleepController = controller;
     return controller;
   }
 
-  // 普通延遲函數 (用於不需要中斷的短暫停頓)
+  // 普通延遲函數 (與 v3.3 相同)
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  // 獲取音檔時長 (毫秒) - 與 v3.2 相同
+  // 獲取音檔時長 (毫秒) - (與 v3.3 相同)
   function getAudioDuration(audioUrl) {
     console.log(`[自動播放] 嘗試獲取音檔時長: ${audioUrl}`);
     return new Promise((resolve) => {
@@ -162,7 +157,7 @@
     });
   }
 
-  // 在 Iframe 內部添加樣式 - 與 v3.2 相同
+  // 在 Iframe 內部添加樣式 (與 v3.3 相同)
   function addStyleToIframe(iframeDoc, css) {
     try {
       const styleElement = iframeDoc.createElement('style');
@@ -174,21 +169,47 @@
     }
   }
 
-  // 顯示 Modal (Iframe + Overlay) - 與 v3.2 類似
-  function showModal(iframe) {
-    let overlay = document.getElementById(OVERLAY_ID);
-    if (!overlay) {
-      overlay = document.createElement('div');
-      overlay.id = OVERLAY_ID;
-      overlay.style.position = 'fixed';
-      overlay.style.top = '0';
-      overlay.style.left = '0';
-      overlay.style.width = '100vw';
-      overlay.style.height = '100vh';
-      overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
-      overlay.style.zIndex = '9998';
-      document.body.appendChild(overlay);
+  // 背景遮罩點擊事件處理函數
+  function handleOverlayClick() {
+    if (isProcessing && !isPaused) {
+      console.log("[自動播放] 點擊背景遮罩，觸發暫停並關閉 Modal。");
+      isPaused = true; // 設置為暫停狀態
+      pauseButton.textContent = '繼續'; // 更新按鈕文字
+      updateStatusDisplay(); // 更新狀態顯示
+
+      // 中斷當前的 sleep
+      if (currentSleepController) {
+        currentSleepController.cancel('paused_overlay');
+      }
+      // 關閉 Modal
+      closeModal();
     }
+  }
+
+  // 顯示 Modal (Iframe + Overlay) - 添加遮罩點擊事件
+  function showModal(iframe) {
+    overlayElement = document.getElementById(OVERLAY_ID); // 獲取或創建遮罩
+    if (!overlayElement) {
+      overlayElement = document.createElement('div');
+      overlayElement.id = OVERLAY_ID;
+      overlayElement.style.position = 'fixed';
+      overlayElement.style.top = '0';
+      overlayElement.style.left = '0';
+      overlayElement.style.width = '100vw';
+      overlayElement.style.height = '100vh';
+      overlayElement.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
+      overlayElement.style.zIndex = '9998';
+      overlayElement.style.cursor = 'pointer'; // 添加手型指標提示可點擊
+      document.body.appendChild(overlayElement);
+      console.log("[自動播放] 已創建背景遮罩");
+    }
+    // 每次顯示 Modal 時都重新綁定事件，確保使用的是最新的狀態
+    overlayElement.removeEventListener('click', handleOverlayClick); // 先移除舊的監聽器
+    overlayElement.addEventListener('click', handleOverlayClick); // 添加新的監聽器
+    console.log("[自動播放] 已綁定背景遮罩點擊事件");
+
+
+    // iframe 樣式設置 (與 v3.3 相同)
     iframe.style.position = 'fixed';
     iframe.style.width = MODAL_WIDTH;
     iframe.style.height = MODAL_HEIGHT;
@@ -198,28 +219,28 @@
     iframe.style.border = '1px solid #ccc';
     iframe.style.borderRadius = '8px';
     iframe.style.boxShadow = '0 5px 20px rgba(0, 0, 0, 0.3)';
-    iframe.style.backgroundColor = 'white'; // 確保 iframe 有背景色
+    iframe.style.backgroundColor = 'white';
     iframe.style.zIndex = '9999';
-    iframe.style.opacity = '1'; // 確保可見
+    iframe.style.opacity = '1';
     iframe.style.pointerEvents = 'auto';
     document.body.appendChild(iframe);
-    currentIframe = iframe; // 保存當前 iframe 引用
+    currentIframe = iframe;
     console.log("[自動播放] 已顯示 Modal iframe");
   }
 
-  // 關閉 Modal (Iframe + Overlay) - 與 v3.2 類似
+  // 關閉 Modal (Iframe + Overlay) - 移除遮罩點擊事件
   function closeModal() {
     if (currentIframe && currentIframe.parentNode) {
       currentIframe.remove();
       console.log("[自動播放] 已移除 iframe");
     }
-    currentIframe = null; // 清除引用
-    const overlay = document.getElementById(OVERLAY_ID);
-    if (overlay) {
-      overlay.remove();
-      console.log("[自動播放] 已移除背景遮罩");
+    currentIframe = null;
+    if (overlayElement) { // 使用保存的引用
+      overlayElement.removeEventListener('click', handleOverlayClick); // 移除監聽器
+      overlayElement.remove();
+      overlayElement = null; // 清除引用
+      console.log("[自動播放] 已移除背景遮罩及其點擊事件");
     }
-    // 如果有關閉 Modal 時正在進行的 sleep，也取消它
     if (currentSleepController) {
       console.log("[自動播放] 關閉 Modal 時取消正在進行的 sleep");
       currentSleepController.cancel('modal_closed');
@@ -227,7 +248,7 @@
     }
   }
 
-  // 處理單一連結的核心邏輯
+  // 處理單一連結的核心邏輯 - 修改 data-src 解析和 finally 塊
   async function processSingleLink(url, index) {
     console.log(`[自動播放] processSingleLink 開始: ${index + 1}/${totalLinks} - ${url}`);
     const iframeId = `auto-play-iframe-${Date.now()}`;
@@ -235,11 +256,11 @@
     iframe.id = iframeId;
 
     return new Promise(async (resolve) => {
-      showModal(iframe); // 顯示空的 Modal 框架和遮罩
+      showModal(iframe);
 
       iframe.onload = async () => {
         console.log(`[自動播放] Iframe 載入完成: ${url}`);
-        if (!isProcessing) { // 如果在 iframe 載入完成前就停止了
+        if (!isProcessing) {
           console.log("[自動播放] Iframe 載入時發現已停止，關閉 Modal");
           closeModal();
           resolve();
@@ -248,7 +269,7 @@
 
         let iframeDoc;
         try {
-          await sleep(150); // 等待 iframe 內部可能存在的初始化
+          await sleep(150);
           iframeDoc = iframe.contentWindow.document;
           addStyleToIframe(iframeDoc, HIGHLIGHT_STYLE);
 
@@ -257,18 +278,14 @@
 
           if (audioButtons.length > 0) {
             for (let i = 0; i < audioButtons.length; i++) {
-              // 在處理每個按鈕前檢查狀態
-              if (!isProcessing) {
-                console.log("[自動播放] 播放音檔前檢測到停止");
-                break; // 跳出音檔循環
-              }
+              if (!isProcessing) { console.log("[自動播放] 播放音檔前檢測到停止"); break; }
               while (isPaused && isProcessing) {
                 console.log("[自動播放] 音檔播放已暫停，等待繼續...");
                 updateStatusDisplay();
-                await sleep(500); // 短暫等待避免 CPU 空轉
-                if (!isProcessing) break; // 如果在暫停期間停止了
+                await sleep(500);
+                if (!isProcessing) break;
               }
-              if (!isProcessing) break; // 再次檢查
+              if (!isProcessing) break;
 
               const button = audioButtons[i];
               if (!button || !iframeDoc.body.contains(button)) {
@@ -277,61 +294,77 @@
               }
               console.log(`[自動播放] 準備播放 iframe 中的第 ${i + 1} 個音檔`);
 
-              // --- 獲取音檔時長 ---
+              // --- **修改 data-src 解析邏輯** ---
               let actualDelayMs = FALLBACK_DELAY_MS;
               let audioSrc = null;
-              try {
-                const srcData = JSON.parse(button.dataset.src.replace(/&quot;/g, '"'));
-                if (Array.isArray(srcData) && srcData.length > 0 && typeof srcData[0] === 'string') {
-                  audioSrc = new URL(srcData[0], iframe.contentWindow.location.href).href;
+              let audioPath = null;
+              const srcString = button.dataset.src;
+
+              if (srcString) {
+                try {
+                  // 嘗試解析為 JSON 陣列
+                  const parsedData = JSON.parse(srcString.replace(/&quot;/g, '"'));
+                  if (Array.isArray(parsedData) && parsedData.length > 0 && typeof parsedData[0] === 'string') {
+                    audioPath = parsedData[0];
+                    console.log("[自動播放] data-src 解析為 JSON 陣列:", audioPath);
+                  } else {
+                    console.warn("[自動播放] data-src 解析為 JSON 但格式不符:", srcString);
+                  }
+                } catch (e) {
+                  // JSON 解析失敗，假定為直接路徑
+                  if (typeof srcString === 'string' && srcString.trim().startsWith('/')) {
+                    audioPath = srcString.trim();
+                    console.log("[自動播放] data-src 解析為直接路徑:", audioPath);
+                  } else {
+                    console.warn("[自動播放] data-src 格式無法識別:", srcString);
+                  }
                 }
-              } catch (parseError) {
-                console.error("[自動播放] 解析 data-src 失敗:", parseError, button.dataset.src);
               }
-              if (audioSrc) {
-                actualDelayMs = await getAudioDuration(audioSrc);
+
+              if (audioPath) {
+                try {
+                  // 確保 base URL 正確 (使用 iframe 的 location)
+                  const base = iframe.contentWindow.location.href;
+                  audioSrc = new URL(audioPath, base).href;
+                } catch (urlError) {
+                  console.error("[自動播放] 構建音檔 URL 失敗:", urlError, audioPath);
+                  audioSrc = null;
+                }
               } else {
-                console.warn("[自動播放] 未能獲取有效音檔 URL，使用後備延遲。");
+                console.warn("[自動播放] 未能從 data-src 提取有效音檔路徑。");
+                audioSrc = null;
               }
-              // --- 時長獲取結束 ---
+
+              actualDelayMs = await getAudioDuration(audioSrc); // 使用解析出的 audioSrc
+              // --- **解析邏輯結束** ---
+
 
               button.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              await sleep(300); // 等待滾動
+              await sleep(300);
 
               button.classList.add(HIGHLIGHT_CLASS);
               button.click();
               console.log(`[自動播放] 已點擊按鈕 ${i + 1}，等待 ${actualDelayMs}ms`);
 
-              // --- 使用可中斷的 sleep ---
               try {
                 const sleepController = interruptibleSleep(actualDelayMs);
                 await sleepController.promise;
               } catch (error) {
                 if (error.isCancellation) {
                   console.log(`[自動播放] 等待音檔 ${i + 1} 被 '${error.reason}' 中斷。`);
-                  // 無論是暫停還是停止，都移除高亮並跳出此 iframe 的音檔循環
                   if (iframeDoc.body.contains(button)) {
                     button.classList.remove(HIGHLIGHT_CLASS);
                   }
-                  break; // 跳出 for 循環
-                } else {
-                  console.error("[自動播放] interruptibleSleep 發生意外錯誤:", error);
-                  // 可以選擇繼續或終止
-                }
-              } finally {
-                currentSleepController = null; // 清理控制器引用
-              }
-              // --- 中斷 sleep 結束 ---
+                  break;
+                } else { console.error("[自動播放] interruptibleSleep 發生意外錯誤:", error); }
+              } finally { currentSleepController = null; }
 
-              // 移除高亮 (如果 sleep 沒有被中斷)
               if (iframeDoc.body.contains(button) && button.classList.contains(HIGHLIGHT_CLASS)) {
                 button.classList.remove(HIGHLIGHT_CLASS);
               }
 
-              // 檢查是否在 sleep 後被停止
               if (!isProcessing) break;
 
-              // 播放下一個之前的延遲 (也需要可中斷)
               if (i < audioButtons.length - 1) {
                 console.log(`[自動播放] 播放下一個前等待 ${DELAY_BETWEEN_CLICKS_MS}ms`);
                 try {
@@ -340,26 +373,29 @@
                 } catch (error) {
                   if (error.isCancellation) {
                     console.log(`[自動播放] 按鈕間等待被 '${error.reason}' 中斷。`);
-                    break; // 跳出 for 循環
+                    break;
                   } else { throw error; }
-                } finally {
-                  currentSleepController = null;
-                }
+                } finally { currentSleepController = null; }
               }
-              // 再次檢查狀態
               if (!isProcessing) break;
 
             } // --- for audioButtons loop end ---
           } else {
             console.log(`[自動播放] Iframe ${url} 中未找到播放按鈕`);
-            await sleep(1000); // 讓使用者看一下空白內容
+            await sleep(1000);
           }
         } catch (error) {
           console.error(`[自動播放] 處理 iframe 內容時出錯 (${url}):`, error);
         } finally {
-          // 不論成功或失敗，只要還在處理流程中，就關閉當前 modal
-          if (isProcessing || isPaused) { // 只有在未被外部停止時才關閉
+          // **修改 finally 邏輯**
+          // 只有在不是暫停狀態時才關閉 Modal (即正常完成或被停止)
+          if (!isPaused) {
+            console.log("[自動播放] processSingleLink 結束，非暫停狀態，關閉 Modal");
             closeModal();
+          } else {
+            console.log("[自動播放] processSingleLink 結束，處於暫停狀態，保持 Modal 開啟");
+            // 如果是暫停，我們需要確保 currentIframe 引用仍然有效，以便稍後可以繼續
+            // closeModal() 不會被調用，所以 currentIframe 保持不變
           }
           resolve(); // 完成此連結的處理
         }
@@ -367,42 +403,45 @@
 
       iframe.onerror = (error) => {
         console.error(`[自動播放] Iframe 載入失敗 (${url}):`, error);
-        closeModal(); // 加載失敗也要關閉 modal
-        resolve(); // 繼續處理下一個連結
+        closeModal();
+        resolve();
       };
 
-      // 設置 src 開始載入
       iframe.src = url;
     }); // --- Promise end ---
   }
 
-  // 循序處理連結列表
+  // 循序處理連結列表 (與 v3.3 相同)
   async function processLinksSequentially() {
     console.log("[自動播放] processLinksSequentially 開始");
     while (currentLinkIndex < totalLinks && isProcessing) {
-      // 檢查是否暫停
       while (isPaused && isProcessing) {
         console.log("[自動播放] 主流程已暫停，等待繼續...");
         updateStatusDisplay();
-        await sleep(500); // 短暫等待
+        await sleep(500);
       }
-      // 如果在暫停期間被停止，則跳出主循環
       if (!isProcessing) break;
 
-      updateStatusDisplay(); // 更新進度顯示
+      updateStatusDisplay();
       const linkInfo = linksToProcess[currentLinkIndex];
       console.log(`[自動播放] 準備處理連結 ${currentLinkIndex + 1}/${totalLinks}`);
 
       await processSingleLink(linkInfo.url, currentLinkIndex);
 
-      // 處理完一個連結後，再次檢查狀態
-      if (!isProcessing) break;
+      if (!isProcessing) break; // 檢查 processSingleLink 後是否被停止
 
-      // 移至下一個連結
-      currentLinkIndex++;
+      // **重要：只有在沒有暫停的情況下才移動到下一個連結**
+      // 如果 processSingleLink 是因為 isPaused=true 而結束（保持 Modal 開啟），
+      // 我們不應該增加 currentLinkIndex，以便下次繼續時處理同一個連結。
+      if (!isPaused) {
+        currentLinkIndex++;
+      } else {
+        console.log("[自動播放] 偵測到暫停狀態，currentLinkIndex 保持不變");
+        // 這裡不需要 break，外層 while 會處理 isPaused
+      }
 
-      // 如果還有下一個連結，則在處理前等待一段時間 (可中斷)
-      if (currentLinkIndex < totalLinks && isProcessing) {
+
+      if (currentLinkIndex < totalLinks && isProcessing && !isPaused) { // 只有在非暫停且還有連結時才等待
         console.log(`[自動播放] 等待 ${DELAY_BETWEEN_IFRAMES_MS}ms 後處理下一個連結`);
         try {
           const sleepController = interruptibleSleep(DELAY_BETWEEN_IFRAMES_MS);
@@ -410,36 +449,34 @@
         } catch (error) {
           if (error.isCancellation) {
             console.log(`[自動播放] 連結間等待被 '${error.reason}' 中斷。`);
-            // 如果是停止，isProcessing 會是 false，循環會自然結束
-            // 如果是暫停，isPaused 會是 true，循環會在下次迭代開始時等待
           } else { throw error; }
         } finally {
           currentSleepController = null;
         }
       }
-      // 再次檢查狀態
       if (!isProcessing) break;
 
     } // --- while loop end ---
 
-    // 循環結束後的處理
     if (!isProcessing) {
       console.log("[自動播放] 處理流程被停止。");
-      // closeModal(); // 確保 modal 已關閉 (stopPlayback 會調用)
       resetTriggerButton();
-    } else if (!isPaused) { // 正常完成
+    } else if (!isPaused) {
       console.log("[自動播放] 所有連結處理完畢。");
       alert("所有連結攏處理完畢！");
       resetTriggerButton();
+    } else {
+      console.log("[自動播放] 流程結束於暫停狀態。");
+      // 維持 UI 狀態，等待使用者操作
     }
-    // 如果結束時是暫停狀態，則維持 UI 不變，等待繼續
   }
 
   // --- 控制按鈕事件處理 ---
 
+  // startPlayback (與 v3.3 相同)
   function startPlayback() {
     console.log("[自動播放] 開始/繼續 播放...");
-    if (!isProcessing) { // ---- 如果是首次開始 ----
+    if (!isProcessing) {
       const resultTable = document.querySelector('table.table.d-none.d-md-table');
       if (!resultTable) { alert("揣無結果表格！"); return; }
       const linkElements = resultTable.querySelectorAll('tbody tr td a[href^="/und-hani/su/"]');
@@ -447,64 +484,70 @@
 
       linksToProcess = Array.from(linkElements).map(a => ({ url: new URL(a.getAttribute('href'), window.location.origin).href }));
       totalLinks = linksToProcess.length;
-      currentLinkIndex = 0; // 從頭開始
+      currentLinkIndex = 0;
       isProcessing = true;
       isPaused = false;
 
-      // 更新 UI
-      startButton.style.display = 'none'; // 隱藏開始按鈕
+      startButton.style.display = 'none';
       pauseButton.style.display = 'inline-block';
       pauseButton.textContent = '暫停';
       stopButton.style.display = 'inline-block';
       statusDisplay.style.display = 'inline-block';
 
       updateStatusDisplay();
-      processLinksSequentially(); // 啟動主流程
+      processLinksSequentially();
 
-    } else if (isPaused) { // ---- 如果是從暫停狀態繼續 ----
+    } else if (isPaused) {
       isPaused = false;
       pauseButton.textContent = '暫停';
       updateStatusDisplay();
       console.log("[自動播放] 從暫停狀態繼續。");
-      // 主流程 processLinksSequentially 會自動檢測到 isPaused 為 false 並繼續
-    }
-  }
-
-  function pausePlayback() {
-    if (isProcessing) {
-      if (!isPaused) { // ---- 執行暫停 ----
-        isPaused = true;
-        pauseButton.textContent = '繼續';
-        updateStatusDisplay();
-        console.log("[自動播放] 執行暫停。");
-        // 中斷當前的 sleep (如果有的話)
-        if (currentSleepController) {
-          currentSleepController.cancel('paused');
-        }
-      } else { // ---- 執行繼續 (等同於點擊 startButton) ----
-        startPlayback();
+      // 如果 currentIframe 仍然存在 (表示上次是按鈕暫停，Modal 沒關)
+      // 則不需要重新啟動 processLinksSequentially，
+      // 它內部的 while(isPaused) 會自動解除阻塞。
+      // 如果 currentIframe 為 null (表示上次是點擊背景暫停，Modal 已關)
+      // 則需要重新啟動 processLinksSequentially 來處理當前的 currentLinkIndex
+      if (!currentIframe) {
+        console.log("[自動播放] 從背景點擊暫停狀態繼續，重新啟動處理流程。");
+        // 確保 isProcessing 仍然是 true
+        isProcessing = true;
+        processLinksSequentially();
       }
     }
   }
 
+  // pausePlayback - 修改為不關閉 Modal
+  function pausePlayback() {
+    if (isProcessing) {
+      if (!isPaused) {
+        isPaused = true;
+        pauseButton.textContent = '繼續';
+        updateStatusDisplay();
+        console.log("[自動播放] 執行暫停 (保持 Modal 開啟)。");
+        if (currentSleepController) {
+          currentSleepController.cancel('paused');
+        }
+        // **不再調用 closeModal()**
+      } else {
+        startPlayback(); // 從暫停狀態繼續
+      }
+    }
+  }
+
+  // stopPlayback (與 v3.3 相同)
   function stopPlayback() {
     console.log("[自動播放] 執行停止。");
-    isProcessing = false; // 設置處理標誌為 false
-    isPaused = false;     // 同時清除暫停標誌
-
-    // 中斷當前的 sleep (如果有的話)
+    isProcessing = false;
+    isPaused = false;
     if (currentSleepController) {
       currentSleepController.cancel('stopped');
     }
-
-    // 立即關閉當前的 Modal (如果存在)
-    closeModal();
-
-    // 重置 UI 到初始狀態
+    closeModal(); // 停止時總是關閉 Modal
     resetTriggerButton();
-    updateStatusDisplay(); // 清空狀態顯示
+    updateStatusDisplay();
   }
 
+  // updateStatusDisplay (與 v3.3 相同)
   function updateStatusDisplay() {
     if (statusDisplay) {
       if (isProcessing && !isPaused) {
@@ -512,14 +555,15 @@
       } else if (isProcessing && isPaused) {
         statusDisplay.textContent = `已暫停 (${currentLinkIndex + 1}/${totalLinks})`;
       } else {
-        statusDisplay.textContent = ''; // 不在處理中則清空
+        statusDisplay.textContent = '';
       }
     }
   }
 
+  // resetTriggerButton (與 v3.3 相同)
   function resetTriggerButton() {
     console.log("[自動播放] 重置按鈕狀態。");
-    isProcessing = false; // 確保狀態重置
+    isProcessing = false;
     isPaused = false;
     currentLinkIndex = 0;
     totalLinks = 0;
@@ -528,82 +572,79 @@
       startButton.disabled = false;
       startButton.style.display = 'inline-block';
       pauseButton.style.display = 'none';
-      pauseButton.textContent = '暫停'; // 恢復預設文字
+      pauseButton.textContent = '暫停';
       stopButton.style.display = 'none';
       statusDisplay.style.display = 'none';
       statusDisplay.textContent = '';
     }
+    // 確保 Modal 也關閉了
+    closeModal();
   }
 
-  // --- 添加觸發按鈕 ---
+  // --- 添加觸發按鈕 --- (與 v3.3 相同)
   function addTriggerButton() {
-    if (document.getElementById('auto-play-controls-container')) return; // 防止重複添加
+    if (document.getElementById('auto-play-controls-container')) return;
 
     const buttonContainer = document.createElement('div');
-    buttonContainer.id = 'auto-play-controls-container'; // 給容器一個 ID
+    buttonContainer.id = 'auto-play-controls-container';
     buttonContainer.style.position = 'fixed';
     buttonContainer.style.top = '10px';
     buttonContainer.style.left = '10px';
     buttonContainer.style.zIndex = '10001';
-    buttonContainer.style.backgroundColor = 'rgba(255, 255, 255, 0.8)'; // 半透明背景
+    buttonContainer.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
     buttonContainer.style.padding = '5px 10px';
     buttonContainer.style.borderRadius = '5px';
     buttonContainer.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
 
     const buttonStyle = `
-            padding: 6px 12px; /* 稍微縮小按鈕 */
+            padding: 6px 12px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 14px; /* 稍微縮小字體 */
+            font-size: 14px;
             margin-right: 5px;
             transition: background-color 0.2s ease;
         `;
 
-    // 開始按鈕 (初始顯示)
     startButton = document.createElement('button');
     startButton.id = 'auto-play-start-button';
     startButton.textContent = '開始播放全部';
     startButton.style.cssText = buttonStyle;
-    startButton.style.backgroundColor = '#28a745'; // 綠色
+    startButton.style.backgroundColor = '#28a745';
     startButton.style.color = 'white';
     startButton.addEventListener('click', startPlayback);
     buttonContainer.appendChild(startButton);
 
-    // 暫停/繼續按鈕 (初始隱藏)
     pauseButton = document.createElement('button');
     pauseButton.id = 'auto-play-pause-button';
     pauseButton.textContent = '暫停';
     pauseButton.style.cssText = buttonStyle;
-    pauseButton.style.backgroundColor = '#ffc107'; // 黃色
+    pauseButton.style.backgroundColor = '#ffc107';
     pauseButton.style.color = 'black';
     pauseButton.style.display = 'none';
     pauseButton.addEventListener('click', pausePlayback);
     buttonContainer.appendChild(pauseButton);
 
-    // 停止按鈕 (初始隱藏)
     stopButton = document.createElement('button');
     stopButton.id = 'auto-play-stop-button';
     stopButton.textContent = '停止';
     stopButton.style.cssText = buttonStyle;
-    stopButton.style.backgroundColor = '#dc3545'; // 紅色
+    stopButton.style.backgroundColor = '#dc3545';
     stopButton.style.color = 'white';
     stopButton.style.display = 'none';
     stopButton.addEventListener('click', stopPlayback);
     buttonContainer.appendChild(stopButton);
 
-    // 狀態顯示 (初始隱藏)
     statusDisplay = document.createElement('span');
     statusDisplay.id = 'auto-play-status';
     statusDisplay.style.display = 'none';
     statusDisplay.style.marginLeft = '10px';
     statusDisplay.style.fontSize = '14px';
-    statusDisplay.style.verticalAlign = 'middle'; // 垂直居中
+    statusDisplay.style.verticalAlign = 'middle';
     buttonContainer.appendChild(statusDisplay);
 
     document.body.appendChild(buttonContainer);
 
-    // 添加按鈕禁用/懸停樣式
     GM_addStyle(`
             #auto-play-controls-container button:disabled {
                 opacity: 0.65;
@@ -615,11 +656,11 @@
         `);
   }
 
-  // --- 初始化 ---
+  // --- 初始化 --- (與 v3.3 相同)
   function initialize() {
     if (window.autoPlayerInitialized) return;
     window.autoPlayerInitialized = true;
-    console.log("[自動播放] 初始化腳本 v3.3 ...");
+    console.log("[自動播放] 初始化腳本 v3.4 ...");
     addTriggerButton();
   }
 
