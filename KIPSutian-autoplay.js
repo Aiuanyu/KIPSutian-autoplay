@@ -1,15 +1,19 @@
 // ==UserScript==
-// @name        教育部臺語辭典 - 自動循序播放音檔 (表格滾動與列播放)
+// @name         KIPSutian-autoplay
 // @namespace    aiuanyu
 // @version      4.0
 // @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
 // @match        http*://sutian.moe.edu.tw/und-hani/hunlui/*
+// @match        http*://sutian.moe.edu.tw/und-hani/siannuntiau/*
+// @match        http*://sutian.moe.edu.tw/und-hani/tsongpitueh/*
+// @match        http*://sutian.moe.edu.tw/und-hani/huliok/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest // 備用
 // @connect      sutian.moe.edu.tw // 允許獲取音檔
 // @run-at       document-idle
+// @license      GNU GPLv3
 // ==/UserScript==
 
 (function () {
@@ -20,8 +24,8 @@
   const MODAL_HEIGHT = '70vh';
   const FALLBACK_DELAY_MS = 3000;
   const DELAY_BUFFER_MS = 500;
-  const DELAY_BETWEEN_CLICKS_MS = 750;
-  const DELAY_BETWEEN_IFRAMES_MS = 500;
+  const DELAY_BETWEEN_CLICKS_MS = 200;
+  const DELAY_BETWEEN_IFRAMES_MS = 200;
   const HIGHLIGHT_CLASS = 'userscript-audio-playing';
   const OVERLAY_ID = 'userscript-modal-overlay';
   const ROW_HIGHLIGHT_COLOR = 'rgba(0, 255, 0, 0.1)'; // 表格列高亮顏色
