@@ -4,7 +4,8 @@
 // @version      4.0
 // @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。
 // @author       Aiuanyu 愛灣語 + Gemini
-// @match        https://sutian.moe.edu.tw/und-hani/tshiau/*
+// @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
+// @match        http*://sutian.moe.edu.tw/und-hani/hunlui/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest // 備用
 // @connect      sutian.moe.edu.tw // 允許獲取音檔
@@ -16,11 +17,11 @@
 
   // --- 配置 ---
   const MODAL_WIDTH = '80vw';
-  const MODAL_HEIGHT = '50vh';
+  const MODAL_HEIGHT = '70vh';
   const FALLBACK_DELAY_MS = 3000;
   const DELAY_BUFFER_MS = 500;
   const DELAY_BETWEEN_CLICKS_MS = 750;
-  const DELAY_BETWEEN_IFRAMES_MS = 1250;
+  const DELAY_BETWEEN_IFRAMES_MS = 500;
   const HIGHLIGHT_CLASS = 'userscript-audio-playing';
   const OVERLAY_ID = 'userscript-modal-overlay';
   const ROW_HIGHLIGHT_COLOR = 'rgba(0, 255, 0, 0.1)'; // 表格列高亮顏色
@@ -521,7 +522,7 @@
 
         playButton.addEventListener('click', handleRowPlayButtonClick);
 
-        firstTd.insertBefore(playButton, numberSpan);
+        firstTd.appendChild(playButton);
       }
     });
     console.log(`[自動播放] 已注入 ${rows.length} 個表格列播放按鈕。`);
