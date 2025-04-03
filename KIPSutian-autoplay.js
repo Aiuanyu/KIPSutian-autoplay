@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name    教育部臺語辭典 - 自動循序播放音檔 (偵錯恢復後關閉問題)
+// @name    教育部臺語辭典 - 自動循序播放音檔 (偵錯恢復後關閉問題 + 從指定行開始播放)
 // @namespace   aiuanyu
-// @version     3.9
-// @description 自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放其中的音檔(自動偵測時長)，可即時暫停(不關閉Modal)/停止/點擊背景暫停(關閉Modal)，並根據亮暗模式高亮按鈕。增加恢復後關閉問題的偵錯 Log。
+// @version     4.3
+// @description 自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放其中的音檔(自動偵測時長)，可即時暫停(不關閉Modal)/停止/點擊背景暫停(關閉Modal)，並增加從指定行開始播放的功能。修正在停止後無法從指定行開始播放的錯誤 (基於 v4.0，停止後會重新獲取連結)。
 // @author      Aiuanyu 愛灣語 + Gemini
 // @match       https://sutian.moe.edu.tw/und-hani/tshiau/*
 // @grant       GM_addStyle
@@ -304,8 +304,10 @@
   function startPlayback() {
     console.log(`[自動播放] 開始/繼續 按鈕點擊。 isProcessing: ${isProcessing}, isPaused: ${isPaused}`); // 增加 Log
     if (!isProcessing) { // ---- 首次開始 ----
-      const resultTable = document.querySelector('table.table.d-none.d-md-table'); if (!resultTable) { alert("揣無結果表格！"); return; }
-      const linkElements = resultTable.querySelectorAll('tbody tr td a[href^="/und-hani/su/"]'); if (linkElements.length === 0) { alert("表格內底揣無詞目連結！"); return; }
+      const resultTable = document.querySelector('table.table.d-none.d-md-table');
+      if (!resultTable) { alert("揣無結果表格！"); return; }
+      const linkElements = resultTable.querySelectorAll('tbody tr td a[href^="/und-hani/su/"]');
+      if (linkElements.length === 0) { alert("表格內底揣無詞目連結！"); return; }
       linksToProcess = Array.from(linkElements).map(a => ({ url: new URL(a.getAttribute('href'), window.location.origin).href }));
       totalLinks = linksToProcess.length; currentLinkIndex = 0; isProcessing = true; isPaused = false;
       startButton.style.display = 'none'; pauseButton.style.display = 'inline-block'; pauseButton.textContent = '暫停'; stopButton.style.display = 'inline-block'; statusDisplay.style.display = 'inline-block';
@@ -357,9 +359,99 @@
   // resetTriggerButton
   function resetTriggerButton() {
     console.log("[自動播放] 重置按鈕狀態。");
-    isProcessing = false; isPaused = false; currentLinkIndex = 0; totalLinks = 0; linksToProcess = [];
-    if (startButton && pauseButton && stopButton && statusDisplay) { startButton.disabled = false; startButton.style.display = 'inline-block'; pauseButton.style.display = 'none'; pauseButton.textContent = '暫停'; stopButton.style.display = 'none'; statusDisplay.style.display = 'none'; statusDisplay.textContent = ''; }
+    isProcessing = false;
+    isPaused = false;
+    currentLinkIndex = 0;
+    totalLinks = 0; // This is the key part
+    if (startButton && pauseButton && stopButton && statusDisplay) {
+      startButton.disabled = false;
+      startButton.style.display = 'inline-block';
+      pauseButton.style.display = 'none';
+      pauseButton.textContent = '暫停';
+      stopButton.style.display = 'none';
+      statusDisplay.style.display = 'none';
+      statusDisplay.textContent = '';
+    }
     closeModal();
+  }
+
+  function addStartFromRowButtons() {
+    if (document.querySelector('.start-from-row-button')) {
+      return; // Buttons already added
+    }
+    const resultTable = document.querySelector('table.table.d-none.d-md-table');
+    if (!resultTable) {
+      return;
+    }
+    const rows = resultTable.querySelectorAll('tbody tr');
+    const startButton = document.getElementById('auto-play-start-button');
+    const buttonColor = startButton ? getComputedStyle(startButton).backgroundColor : '#28a745';
+    const playIconSVG = `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" style="display: inline-block; vertical-align: middle; margin-right: 5px;"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2H8c-1.1 0-2 .9-2 2v14zm10-8l-6 3V8l6 3z"/></svg>`;
+
+    rows.forEach((row, index) => {
+      const sequenceSpan = row.querySelector('td span.fw-normal');
+      if (sequenceSpan) {
+        const playButton = document.createElement('button');
+        playButton.innerHTML = playIconSVG;
+        playButton.classList.add('start-from-row-button');
+        playButton.dataset.rowIndex = index;
+        playButton.title = '從此行開始播放';
+        playButton.style.cssText = `
+                    background-color: ${buttonColor};
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 0.8em;
+                    padding: 2px 5px;
+                    margin-right: 5px;
+                    vertical-align: middle;
+                `;
+        sequenceSpan.parentNode.insertBefore(playButton, sequenceSpan);
+      }
+    });
+
+    document.addEventListener('click', function (event) {
+      if (event.target.classList.contains('start-from-row-button')) {
+        if (!isProcessing) {
+          // Check if totalLinks is 0 and re-fetch if so
+          if (totalLinks === 0) {
+            const resultTable = document.querySelector('table.table.d-none.d-md-table');
+            if (resultTable) {
+              const linkElements = resultTable.querySelectorAll('tbody tr td a[href^="/und-hani/su/"]');
+              linksToProcess = Array.from(linkElements).map(a => ({ url: new URL(a.getAttribute('href'), window.location.origin).href }));
+              totalLinks = linksToProcess.length;
+              console.log(`[自動播放][偵錯] 重新找到 ${totalLinks} 個連結。`);
+            } else {
+              console.error("[自動播放] 無法重新找到結果表格。");
+              return;
+            }
+          }
+
+          const rowIndex = parseInt(event.target.dataset.rowIndex, 10);
+          if (isNaN(rowIndex)) {
+            console.error("[自動播放] 無效的行索引 (NaN):", event.target.dataset.rowIndex);
+            return;
+          }
+          if (rowIndex >= 0 && rowIndex < totalLinks) {
+            currentLinkIndex = rowIndex;
+            isProcessing = true;
+            isPaused = false;
+            startButton.style.display = 'none';
+            pauseButton.style.display = 'inline-block';
+            pauseButton.textContent = '暫停';
+            stopButton.style.display = 'inline-block';
+            statusDisplay.style.display = 'inline-block';
+            updateStatusDisplay();
+            processLinksSequentially();
+          } else {
+            console.error("[自動播放] 無效的行索引:", rowIndex, "totalLinks:", totalLinks);
+          }
+        } else {
+          console.log("[自動播放] 正在播放中，無法從指定行開始。");
+        }
+      }
+    });
   }
 
   // --- 添加觸發按鈕 ---
@@ -375,7 +467,18 @@
 
   // --- 初始化 ---
   function initialize() {
-    if (window.autoPlayerInitialized) return; window.autoPlayerInitialized = true; console.log("[自動播放] 初始化腳本 v3.9 ..."); addTriggerButton();
+    if (window.autoPlayerInitialized) return; window.autoPlayerInitialized = true; console.log("[自動播放] 初始化腳本 v4.0 ..."); addTriggerButton();
+    // Initialize linksToProcess and totalLinks on page load
+    const resultTable = document.querySelector('table.table.d-none.d-md-table');
+    if (resultTable) {
+      const linkElements = resultTable.querySelectorAll('tbody tr td a[href^="/und-hani/su/"]');
+      linksToProcess = Array.from(linkElements).map(a => ({ url: new URL(a.getAttribute('href'), window.location.origin).href }));
+      totalLinks = linksToProcess.length;
+      console.log(`[自動播放] 找到 ${totalLinks} 個連結。`);
+      addStartFromRowButtons(); // Add the row buttons after initializing links
+    } else {
+      console.log("[自動播放] 結果表格尚未找到。");
+    }
   }
   if (document.readyState === 'complete' || document.readyState === 'interactive') { setTimeout(initialize, 0); } else { document.addEventListener('DOMContentLoaded', initialize); }
 
