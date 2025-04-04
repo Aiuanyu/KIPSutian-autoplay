@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.3
-// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.3: 支援 zh-hant 路徑連結，並處理頁面上所有符合條件的表格。**
+// @version      4.4
+// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.4: 修正窄螢幕表格按鈕插入位置。**
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
 // @match        http*://sutian.moe.edu.tw/und-hani/hunlui/*
@@ -41,7 +41,10 @@
   const PAGINATION_PARAMS = ['iahbe', 'pitsoo']; // ** 可能需要根據實際情況調整分頁參數列表 **
   const AUTO_START_MAX_WAIT_MS = 10000; // 自動啟動時等待表格的最長時間
   const AUTO_START_CHECK_INTERVAL_MS = 500; // 自動啟動時檢查表格的間隔
-  const TABLE_SELECTOR = 'table.table.d-none.d-md-table'; // ** 表格選擇器 **
+  const TABLE_SELECTOR_DESKTOP = 'table.table.d-none.d-md-table'; // ** 一般寬度表格選擇器 **
+  const TABLE_SELECTOR_MOBILE = 'table.table.d-md-none';       // ** 窄螢幕表格選擇器 **
+  const LINK_SELECTOR_DESKTOP = 'a[href^="/und-hani/su/"], a[href^="/zh-hant/su/"]'; // ** 一般寬度連結選擇器 **
+  const LINK_SELECTOR_MOBILE = 'a';       // ** 窄螢幕表格中的連結選擇器，因為結構不同，直接選 <a> **
 
   // --- 適應亮暗模式的高亮樣式 ---
   const HIGHLIGHT_STYLE = `
@@ -680,32 +683,39 @@
   function startPlayback(startIndex = 0) {
     console.log(`[自動播放] startPlayback 調用。 startIndex: ${startIndex}, isProcessing: ${isProcessing}, isPaused: ${isPaused}`);
     if (!isProcessing) {
-      // ** 修改：根據 URL 決定連結選擇器 **
-      const currentUrl = window.location.href;
-      let linkSelector;
-      if (currentUrl.includes('/zh-hant/')) {
-        linkSelector = 'a[href^="/zh-hant/su/"]';
-        console.log('[自動播放] 使用 zh-hant 連結選擇器:', linkSelector);
-      } else {
-        linkSelector = 'a[href^="/und-hani/su/"]';
-        console.log('[自動播放] 使用 und-hani 連結選擇器:', linkSelector);
-      }
+      // ** 修改：同時使用桌面和行動版的選擇器 **
+      const linkElementsDesktop = document.querySelectorAll(`${TABLE_SELECTOR_DESKTOP} tbody tr td ${LINK_SELECTOR_DESKTOP}`);
+      const linkElementsMobile = document.querySelectorAll(`${TABLE_SELECTOR_MOBILE} tbody tr td ${LINK_SELECTOR_MOBILE}`);
+      const allLinkElements = [...linkElementsDesktop, ...linkElementsMobile];
 
-      // ** 修改：從所有符合條件的表格中查找連結 **
-      const linkElements = document.querySelectorAll(`${TABLE_SELECTOR} tbody tr td ${linkSelector}`);
-      if (linkElements.length === 0) {
+      if (allLinkElements.length === 0) {
         alert("表格內底揣無詞目連結！(已檢查所有符合條件的表格)");
         return;
       }
-      console.log(`[自動播放] 從所有表格找到 ${linkElements.length} 個連結。`);
+      console.log(`[自動播放] 從所有表格找到 ${allLinkElements.length} 個連結。`);
 
       // ** 修改：建立連結列表，確保 tableRow 引用正確 **
-      const allLinks = Array.from(linkElements).map((a, index) => ({
-        url: new URL(a.getAttribute('href'), window.location.origin).href,
-        anchorElement: a,
-        tableRow: a.closest('tr'), // 確保找到正確的 tr
-        originalIndex: index // 維持全局索引
-      }));
+      const allLinks = [];
+      let globalIndex = 0;
+      allLinkElements.forEach(a => {
+        let row = a.closest('tr'); // 先找最近的 tr
+        // 檢查是否在行動版表格中，如果是，可能需要往上找
+        if (a.closest(TABLE_SELECTOR_MOBILE)) {
+          // 向上查找，直到找到包含序號的 tr
+          while (row && !row.querySelector('span.fw-normal')) {
+            row = row.nextElementSibling; // 移動到下一個兄弟元素
+          }
+        }
+        if (row) {
+          allLinks.push({
+            url: new URL(a.getAttribute('href'), window.location.origin).href,
+            anchorElement: a,
+            tableRow: row,
+            originalIndex: globalIndex
+          });
+        }
+        globalIndex++;
+      });
 
       if (startIndex >= allLinks.length) {
         console.error(`[自動播放] 指定的開始索引 ${startIndex} 超出範圍 (${allLinks.length} 個連結)。`);
@@ -854,65 +864,86 @@
       console.log('[自動播放] Font Awesome CSS 已注入。');
     }
   }
+
   // 注入表格列播放按鈕
   function injectRowPlayButtons() {
-    // ** 修改：處理所有符合條件的表格 **
-    const resultTables = document.querySelectorAll(TABLE_SELECTOR);
-    if (resultTables.length === 0) {
-      console.log("[自動播放] 未找到任何結果表格，無法注入列播放按鈕。");
-      return;
-    }
-    console.log(`[自動播放] 找到 ${resultTables.length} 個結果表格。`);
+    const desktopTables = document.querySelectorAll(TABLE_SELECTOR_DESKTOP);
+    const mobileTables = document.querySelectorAll(TABLE_SELECTOR_MOBILE);
+    let globalRowIndex = 0;
 
-    const playButtonBaseStyle = ` background-color: #28a745; color: white; border: none; border-radius: 4px; padding: 2px 6px; margin-right: 8px; cursor: pointer; font-size: 12px; line-height: 1; vertical-align: middle; transition: background-color 0.2s ease; `;
+    const playButtonBaseStyle = ` background-color: #28a745; color: white; border: none; border-radius: 4px; padding: 2px 6px; margin: 0 8px; cursor: pointer; font-size: 12px; line-height: 1; vertical-align: middle; transition: background-color 0.2s ease; `;
     const playButtonHoverStyle = `.userscript-row-play-button:hover { background-color: #218838 !important; }`;
     GM_addStyle(playButtonHoverStyle);
 
-    let globalRowIndex = 0; // ** 維護一個全局行索引 **
-    resultTables.forEach((table, tableIndex) => {
+    // 處理桌面表格
+    desktopTables.forEach((table, tableIndex) => {
       const rows = table.querySelectorAll('tbody tr');
-      console.log(`[自動播放] 表格 ${tableIndex + 1} 找到 ${rows.length} 行。`);
-      rows.forEach((row) => {
+      rows.forEach(row => {
         const firstTd = row.querySelector('td:first-child');
-        // 稍微放寬條件，只要有第一個 td 就嘗試添加按鈕
         if (firstTd) {
-          // 檢查是否已存在按鈕，避免重複添加
           if (row.querySelector('.userscript-row-play-button')) {
-            // 更新現有按鈕的索引（如果需要）
             const existingButton = row.querySelector('.userscript-row-play-button');
             if (existingButton.dataset.rowIndex !== String(globalRowIndex)) {
-              console.log(`[自動播放][偵錯] 更新列 ${globalRowIndex + 1} 的按鈕索引。`);
+              console.log(`[自動播放][偵錯] 更新桌面表格列 ${globalRowIndex + 1} 的按鈕索引。`);
               existingButton.dataset.rowIndex = globalRowIndex;
               existingButton.title = `從此列開始播放 (第 ${globalRowIndex + 1} 項)`;
             }
           } else {
-            // 添加新按鈕
             const playButton = document.createElement('button');
             playButton.className = 'userscript-row-play-button';
             playButton.style.cssText = playButtonBaseStyle;
             playButton.innerHTML = '<i class="fas fa-play"></i>';
-            playButton.dataset.rowIndex = globalRowIndex; // ** 使用全局索引 **
+            playButton.dataset.rowIndex = globalRowIndex;
             playButton.title = `從此列開始播放 (第 ${globalRowIndex + 1} 項)`;
             playButton.addEventListener('click', handleRowPlayButtonClick);
-            // 嘗試將按鈕放在數字後面（如果有的話），否則放在 td 開頭
-            const numberSpan = firstTd.querySelector('span.fw-normal');
-            if (numberSpan && numberSpan.nextSibling) {
-              firstTd.insertBefore(playButton, numberSpan.nextSibling);
-            } else if (numberSpan) {
-              firstTd.appendChild(playButton);
-            }
-            else {
-              firstTd.insertBefore(playButton, firstTd.firstChild); // 放在最前面
+            const linkElement = row.querySelector(LINK_SELECTOR_DESKTOP);
+            if (linkElement && linkElement.parentNode) {
+              linkElement.parentNode.insertBefore(playButton, linkElement);
+            } else {
+              firstTd.insertBefore(playButton, firstTd.firstChild);
             }
           }
-        } else {
-          console.warn(`[自動播放] 表格 ${tableIndex + 1} 的某行找不到第一個 td。`);
         }
-        globalRowIndex++; // ** 遞增全局索引 **
+        globalRowIndex++;
+      });
+    });
+
+    // 處理行動表格
+    mobileTables.forEach((table, tableIndex) => {
+      const rows = table.querySelectorAll('tbody tr');
+      rows.forEach(row => {
+        const firstTd = row.querySelector('td:first-child');  // 確保取得第一個 td
+        if (firstTd) {
+          const numberSpan = row.querySelector('span.fw-normal'); // 在當前 row 內找 span
+          if (numberSpan) { // 確保有找到 span.fw-normal
+            if (row.querySelector('.userscript-row-play-button')) {
+              const existingButton = row.querySelector('.userscript-row-play-button');
+              if (existingButton.dataset.rowIndex !== String(globalRowIndex)) {
+                console.log(`[自動播放][偵錯] 更新行動表格列 ${globalRowIndex + 1} 的按鈕索引。`);
+                existingButton.dataset.rowIndex = globalRowIndex;
+                existingButton.title = `從此列開始播放 (第 ${globalRowIndex + 1} 項)`;
+              }
+            } else {
+              const playButton = document.createElement('button');
+              playButton.className = 'userscript-row-play-button';
+              playButton.style.cssText = playButtonBaseStyle;
+              playButton.innerHTML = '<i class="fas fa-play"></i>';
+              playButton.dataset.rowIndex = globalRowIndex;
+              playButton.title = `從此列開始播放 (第 ${globalRowIndex + 1} 項)`;
+              playButton.addEventListener('click', handleRowPlayButtonClick);
+              //numberSpan.parentNode.insertBefore(playButton, numberSpan.nextSibling); // 放在 span 後面
+              firstTd.insertBefore(playButton, numberSpan.nextSibling);
+            }
+          } else {
+            console.warn(`[自動播放] 行動表格中，第 ${globalRowIndex + 1} 列的第一個 TD 內沒有找到 span.fw-normal。`);
+          }
+        }
+        globalRowIndex++;
       });
     });
     console.log(`[自動播放] 已處理 ${globalRowIndex} 個表格列，注入或更新播放按鈕。`);
   }
+
   // 添加觸發按鈕
   function addTriggerButton() {
     if (document.getElementById('auto-play-controls-container')) return;
@@ -961,7 +992,7 @@
     statusDisplay.style.verticalAlign = 'middle';
     buttonContainer.appendChild(statusDisplay);
     document.body.appendChild(buttonContainer);
-    GM_addStyle(`#auto-play-controls-container button:disabled { opacity: 0.65; cursor: not-allowed; } #auto-play-start-button:hover:not(:disabled) { background-color: #218838 !important; } #auto-play-pause-button:hover:not(:disabled) { background-color: #e0a800 !important; } #auto-play-stop-button:hover:not(:disabled) { background-color: #c82333 !important; }`);
+    GM_addStyle(`#auto-play-controls-container button:disabled{ opacity: 0.65; cursor: not-allowed; } #auto-play-start-button:hover:not(:disabled) { background-color: #218838 !important; } #auto-play-pause-button:hover:not(:disabled) { background-color: #e0a800 !important; } #auto-play-stop-button:hover:not(:disabled) { background-color: #c82333 !important; }`);
   }
 
   // ** 新增：輔助函數，獲取當前應使用的連結選擇器 **
@@ -978,7 +1009,7 @@
   function initialize() {
     if (window.autoPlayerInitialized) return;
     window.autoPlayerInitialized = true;
-    console.log("[自動播放] 初始化腳本 v4.3 ...");
+    console.log("[自動播放] 初始化腳本 v4.4 ...");
     ensureFontAwesome();
     addTriggerButton();
     // ** 修改：延遲注入按鈕，確保表格渲染完成 **
@@ -997,7 +1028,9 @@
         console.log("[自動播放][等待] 檢查表格和連結是否存在...");
         // ** 修改：使用正確的選擇器檢查 **
         const linkSelector = getLinkSelector();
-        const links = document.querySelectorAll(`${TABLE_SELECTOR} tbody tr td ${linkSelector}`);
+        const linksDesktop = document.querySelectorAll(`${TABLE_SELECTOR_DESKTOP} tbody tr td ${linkSelector}`);
+        const linksMobile = document.querySelectorAll(`${TABLE_SELECTOR_MOBILE} tbody tr td ${LINK_SELECTOR_MOBILE}`);
+        const allLinks = [...linksDesktop, ...linksMobile];
 
         if (links && links.length > 0) {
           console.log("[自動播放][等待] 表格和連結已找到，延遲後啟動播放...");
