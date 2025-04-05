@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.9
-// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.9: 改用 ResizeObserver 監聽 RWD 變化，取代 MutationObserver。**
+// @version      4.13
+// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.13: 嘗試修正寬螢幕主頁捲動問題 (改捲動 td)。**
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
 // @match        http*://sutian.moe.edu.tw/und-hani/hunlui/*
@@ -15,8 +15,8 @@
 // @match        http*://sutian.moe.edu.tw/zh-hant/tsongpitueh/*
 // @match        http*://sutian.moe.edu.tw/zh-hant/huliok/*
 // @grant        GM_addStyle
-// @grant        GM_xmlhttpRequest // 備用
-// @connect      sutian.moe.edu.tw // 允許獲取音檔
+// @grant        GM_xmlhttpRequest
+// @connect      sutian.moe.edu.tw
 // @run-at       document-idle
 // @license      GNU GPLv3
 // ==/UserScript==
@@ -32,6 +32,7 @@
   const DELAY_BETWEEN_CLICKS_MS = 200;
   const DELAY_BETWEEN_IFRAMES_MS = 200;
   const HIGHLIGHT_CLASS = 'userscript-audio-playing';
+  const ROW_HIGHLIGHT_CLASS_MAIN = 'userscript-row-highlight'; // 主頁面高亮 class
   const OVERLAY_ID = 'userscript-modal-overlay';
   const ROW_HIGHLIGHT_COLOR = 'rgba(0, 255, 0, 0.1)';
   const ROW_HIGHLIGHT_DURATION = 1500;
@@ -51,7 +52,7 @@
   // --- 適應亮暗模式的高亮樣式 ---
   const HIGHLIGHT_STYLE = `
         /* 預設 (亮色模式) */
-        .${HIGHLIGHT_CLASS} {
+        .${HIGHLIGHT_CLASS} { /* iframe 內按鈕高亮 */
             background-color: #FFF352 !important;
             color: black !important;
             outline: 2px solid #FFB800 !important;
@@ -77,7 +78,7 @@
   let totalLinks = 0;
   let currentSleepController = null;
   let currentIframe = null;
-  let linksToProcess = [];
+  let linksToProcess = []; // ** 注意：現在不儲存 tableRow **
   let rowHighlightTimeout = null;
   let resizeDebounceTimeout = null; // 用於 ResizeObserver 的 debounce
 
@@ -369,8 +370,42 @@
           actualDelayMs = await getAudioDuration(audioSrc);
           // --- 解析結束 ---
 
-          button.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          await sleep(300);
+          // --- **修改：決定 iframe 內部捲動目標** ---
+          let scrollTargetElement = button; // 預設捲動到按鈕本身
+          const flexContainer = button.closest('div.d-flex.flex-row.align-items-baseline');
+          const fs6Container = button.closest('div.mb-0.fs-6');
+
+          if (flexContainer) {
+            // 情況 1: 嘗試尋找前面的 h1#main (使用者已更新)
+            const mainHeading = iframeDoc.querySelector('h1#main'); // 使用 ID 選擇器
+            if (mainHeading) {
+              console.log("[自動播放][Iframe捲動] 找到 flex container，嘗試捲動到 h1#main");
+              scrollTargetElement = mainHeading;
+            } else {
+              console.log("[自動播放][Iframe捲動] 找到 flex container，但未找到 h1#main，捲動到按鈕");
+            }
+          } else if (fs6Container) {
+            // 情況 2: 嘗試尋找前面的 span.mb-0
+            const precedingSpan = fs6Container.previousElementSibling;
+            if (precedingSpan && precedingSpan.matches('span.mb-0')) {
+              console.log("[自動播放][Iframe捲動] 找到 fs6 container，嘗試捲動到前面的 span.mb-0");
+              scrollTargetElement = precedingSpan;
+            } else {
+              console.log("[自動播放][Iframe捲動] 找到 fs6 container，但未找到前面的 span.mb-0，捲動到按鈕");
+            }
+          } else {
+            console.log("[自動播放][Iframe捲動] 未匹配特殊容器，捲動到按鈕");
+          }
+
+          if (scrollTargetElement && iframeDoc.body.contains(scrollTargetElement)) {
+            scrollTargetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            console.log("[自動播放][Iframe捲動] 已執行捲動到目標:", scrollTargetElement);
+          } else {
+            console.warn("[自動播放][Iframe捲動] 捲動目標無效或不存在:", scrollTargetElement);
+          }
+          // --- 捲動邏輯結束 ---
+
+          await sleep(300); // 等待捲動完成
 
           button.classList.add(HIGHLIGHT_CLASS);
           button.click();
@@ -514,6 +549,69 @@
     });
   }
 
+  // ** 修改：輔助函數，根據 URL 查找對應的主頁面元素 (td 或 table) **
+  function findElementForLink(targetUrl) {
+    if (!targetUrl) return null;
+
+    console.log(`[自動播放][查找元素] 尋找 URL: ${targetUrl}`);
+    const visibleTables = getVisibleTables();
+    const linkSelector = getLinkSelector();
+    let targetElement = null;
+
+    for (const table of visibleTables) {
+      const isWideTable = table.matches(WIDE_TABLE_SELECTOR);
+      const isNarrowTable = table.matches(NARROW_TABLE_SELECTOR);
+      const rows = table.querySelectorAll('tbody tr');
+      // console.log(`[自動播放][查找元素] 檢查 ${isWideTable ? '寬' : isNarrowTable ? '窄' : '未知'} 表格...`);
+
+      if (isWideTable) {
+        for (const row of rows) {
+          const firstTd = row.querySelector('td:first-of-type');
+          if (firstTd && firstTd.querySelector('span.fw-normal')) {
+            const linkElement = row.querySelector(linkSelector);
+            if (linkElement) {
+              try {
+                const linkHref = new URL(linkElement.getAttribute('href'), window.location.origin).href;
+                if (linkHref === targetUrl) {
+                  // ** 修改：寬螢幕目標改為第一個 td **
+                  targetElement = firstTd;
+                  console.log("[自動播放][查找元素][寬] 找到對應 td:", targetElement);
+                  break;
+                }
+              } catch (e) {
+                console.error(`[自動播放][查找元素][寬] 處理連結 URL 時出錯:`, e, linkElement);
+              }
+            }
+          }
+        }
+      } else if (isNarrowTable && rows.length >= 2) {
+        const firstRowTd = rows[0].querySelector('td:first-of-type');
+        const secondRowTd = rows[1].querySelector('td:first-of-type');
+        if (firstRowTd && firstRowTd.querySelector('span.fw-normal') && secondRowTd) {
+          const linkElement = secondRowTd.querySelector(linkSelector);
+          if (linkElement) {
+            try {
+              const linkHref = new URL(linkElement.getAttribute('href'), window.location.origin).href;
+              if (linkHref === targetUrl) {
+                targetElement = table; // 窄螢幕目標是 table
+                console.log("[自動播放][查找元素][窄] 找到對應 table:", targetElement);
+                break;
+              }
+            } catch (e) {
+              console.error(`[自動播放][查找元素][窄] 處理連結 URL 時出錯:`, e, linkElement);
+            }
+          }
+        }
+      }
+      if (targetElement) break; // 找到就跳出外層循環
+    }
+
+    if (!targetElement) {
+      console.warn(`[自動播放][查找元素] 未能找到 URL 對應的元素: ${targetUrl}`);
+    }
+    return targetElement;
+  }
+
 
   // 循序處理連結列表 - 加入自動分頁邏輯
   async function processLinksSequentially() {
@@ -533,45 +631,58 @@
       }
 
       updateStatusDisplay();
-      const linkInfo = linksToProcess[currentLinkIndex]; // 獲取當前連結信息 {url, anchorElement, tableRow, originalIndex}
-      console.log(`[自動播放] 準備處理連結 ${currentLinkIndex + 1}/${totalLinks} (全局索引 ${linkInfo.originalIndex})`);
+      const linkInfo = linksToProcess[currentLinkIndex]; // ** 注意：linkInfo 不再包含 tableRow **
+      console.log(`[自動播放] 準備處理連結 ${currentLinkIndex + 1}/${totalLinks} (全局索引 ${linkInfo.originalIndex}) - URL: ${linkInfo.url}`);
 
-      // --- 表格滾動與高亮 ---
-      if (linkInfo.tableRow) {
-        console.log(`[自動播放][偵錯] 正在滾動到表格列 ${linkInfo.originalIndex + 1}`);
+      // --- **修改：動態查找、捲動和高亮主頁面元素** ---
+      const targetElement = findElementForLink(linkInfo.url); // 返回 td 或 table
+
+      if (targetElement) {
+        // ** 修改：高亮目標改為 targetElement 的父元素 (tr 或 table 本身) **
+        const highlightTarget = targetElement.closest('tr') || targetElement; // 如果是 td，找 tr；如果是 table，就是 table 本身
+        console.log(`[自動播放][主頁捲動/高亮] 正在處理項目 ${linkInfo.originalIndex + 1} 對應的元素`, targetElement, `高亮目標:`, highlightTarget);
+
         if (rowHighlightTimeout) {
           clearTimeout(rowHighlightTimeout);
         }
         // 移除所有可能殘留的高亮
-        document.querySelectorAll('.userscript-row-highlight').forEach(row => {
-          row.classList.remove('userscript-row-highlight');
-          row.style.backgroundColor = '';
-          row.style.transition = '';
+        document.querySelectorAll(`.${ROW_HIGHLIGHT_CLASS_MAIN}`).forEach(el => {
+          el.classList.remove(ROW_HIGHLIGHT_CLASS_MAIN);
+          el.style.backgroundColor = '';
+          el.style.transition = '';
         });
 
-        linkInfo.tableRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        await sleep(300); // 等待滾動基本完成
+        // ** 修改：捲動目標為找到的 targetElement (td 或 table) **
+        targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' }); // 改回 center 試試
+        await sleep(300); // 等待捲動基本完成
 
-        linkInfo.tableRow.classList.add('userscript-row-highlight');
-        linkInfo.tableRow.style.backgroundColor = ROW_HIGHLIGHT_COLOR;
-        linkInfo.tableRow.style.transition = 'background-color 0.5s ease-out';
-        console.log(`[自動播放][偵錯] 已高亮表格列 ${linkInfo.originalIndex + 1}`);
+        // ** 修改：高亮目標為 highlightTarget **
+        if (highlightTarget) {
+          highlightTarget.classList.add(ROW_HIGHLIGHT_CLASS_MAIN);
+          highlightTarget.style.backgroundColor = ROW_HIGHLIGHT_COLOR;
+          highlightTarget.style.transition = 'background-color 0.5s ease-out';
+          console.log(`[自動播放][主頁高亮] 已高亮項目 ${linkInfo.originalIndex + 1} 對應的元素`);
 
-        const currentRow = linkInfo.tableRow; // 捕獲當前行引用
-        rowHighlightTimeout = setTimeout(() => {
-          if (currentRow && currentRow.classList.contains('userscript-row-highlight')) { // 確保行仍然存在且有高亮
-            currentRow.style.backgroundColor = '';
-            // 等待背景色過渡完成後移除 class
-            setTimeout(() => {
-              if (currentRow) {
-                currentRow.classList.remove('userscript-row-highlight');
-              }
-            }, 500); // 匹配過渡時間
-          }
-          rowHighlightTimeout = null;
-        }, ROW_HIGHLIGHT_DURATION);
+          const currentHighlightTarget = highlightTarget; // 捕獲當前高亮目標引用
+          rowHighlightTimeout = setTimeout(() => {
+            if (currentHighlightTarget && currentHighlightTarget.classList.contains(ROW_HIGHLIGHT_CLASS_MAIN)) { // 確保元素仍然存在且有高亮
+              currentHighlightTarget.style.backgroundColor = '';
+              // 等待背景色過渡完成後移除 class
+              setTimeout(() => {
+                if (currentHighlightTarget) {
+                  currentHighlightTarget.classList.remove(ROW_HIGHLIGHT_CLASS_MAIN);
+                }
+              }, 500); // 匹配過渡時間
+            }
+            rowHighlightTimeout = null;
+          }, ROW_HIGHLIGHT_DURATION);
+        } else {
+          console.warn(`[自動播放][主頁高亮] 未能確定項目 ${linkInfo.originalIndex + 1} 的高亮目標。`);
+        }
+      } else {
+        console.warn(`[自動播放][主頁捲動] 未能找到項目 ${linkInfo.originalIndex + 1} (URL: ${linkInfo.url}) 對應的元素進行捲動和高亮。`);
       }
-      // --- 滾動高亮結束 ---
+      // --- 捲動高亮邏輯結束 ---
 
       await sleep(200); // 等待滾動和高亮穩定
       if (!isProcessing || isPaused) { // 如果在等待時狀態改變
@@ -625,7 +736,7 @@
 
     console.log(`[自動播放][偵錯] processLinksSequentially 循環結束。 isProcessing: ${isProcessing}, isPaused: ${isPaused}`);
     if (rowHighlightTimeout) { clearTimeout(rowHighlightTimeout); } // 清除高亮
-    document.querySelectorAll('.userscript-row-highlight').forEach(row => { row.classList.remove('userscript-row-highlight'); row.style.backgroundColor = ''; row.style.transition = ''; });
+    document.querySelectorAll(`.${ROW_HIGHLIGHT_CLASS_MAIN}`).forEach(el => { el.classList.remove(ROW_HIGHLIGHT_CLASS_MAIN); el.style.backgroundColor = ''; el.style.transition = ''; });
 
     // --- **自動分頁邏輯** ---
     if (isProcessing && !isPaused) { // 只有在正常處理完畢時才嘗試翻頁
@@ -696,7 +807,7 @@
         return false; // 出錯時視為不可見
       }
     });
-    console.log(`[自動播放] 找到 ${allTables.length} 個潛在表格，其中 ${visibleTables.length} 個當前可見。`);
+    // console.log(`[自動播放] 找到 ${allTables.length} 個潛在表格，其中 ${visibleTables.length} 個當前可見。`); // 可能過於頻繁
     return visibleTables;
   }
 
@@ -723,7 +834,7 @@
         const isNarrowTable = table.matches(NARROW_TABLE_SELECTOR);
 
         if (isWideTable) {
-          console.log("[自動播放][偵錯][連結] 處理寬螢幕表格...");
+          // console.log("[自動播放][偵錯][連結] 處理寬螢幕表格...");
           const rows = table.querySelectorAll('tbody tr');
           rows.forEach(row => {
             const firstTd = row.querySelector('td:first-of-type');
@@ -731,20 +842,24 @@
             if (firstTd && firstTd.querySelector('span.fw-normal')) {
               const linkElement = row.querySelector(linkSelector); // 在同一行找連結
               if (linkElement) {
-                allLinks.push({
-                  url: new URL(linkElement.getAttribute('href'), window.location.origin).href,
-                  anchorElement: linkElement,
-                  tableRow: row, // 高亮此行
-                  originalIndex: globalRowIndex
-                });
-                globalRowIndex++;
+                try {
+                  allLinks.push({
+                    url: new URL(linkElement.getAttribute('href'), window.location.origin).href,
+                    anchorElement: linkElement,
+                    // ** 移除 tableRow **
+                    originalIndex: globalRowIndex
+                  });
+                  globalRowIndex++;
+                } catch (e) {
+                  console.error(`[自動播放][連結][寬] 處理連結 URL 時出錯:`, e, linkElement);
+                }
               } else {
-                console.log(`[自動播放][偵錯][連結][寬] 在標記行 ${globalRowIndex + 1} 中未找到連結 ${linkSelector}`);
+                // console.log(`[自動播放][偵錯][連結][寬] 在標記行 ${globalRowIndex + 1} 中未找到連結 ${linkSelector}`);
               }
             }
           });
         } else if (isNarrowTable) {
-          console.log("[自動播放][偵錯][連結] 處理窄螢幕表格...");
+          // console.log("[自動播放][偵錯][連結] 處理窄螢幕表格...");
           const rows = table.querySelectorAll('tbody tr');
           // 窄螢幕：標記在第一行，連結在第二行
           if (rows.length >= 2) { // 至少需要兩行
@@ -753,27 +868,30 @@
               // 在第二行的第一個 td 中找連結
               const secondRowTd = rows[1].querySelector('td:first-of-type');
               if (secondRowTd) {
-                // ** 修改：在第二行的 td 中尋找連結 **
                 const linkElement = secondRowTd.querySelector(linkSelector);
                 if (linkElement) {
-                  allLinks.push({
-                    url: new URL(linkElement.getAttribute('href'), window.location.origin).href,
-                    anchorElement: linkElement,
-                    tableRow: rows[0], // ** 高亮第一行 (有標記的行) **
-                    originalIndex: globalRowIndex
-                  });
-                  globalRowIndex++;
+                  try {
+                    allLinks.push({
+                      url: new URL(linkElement.getAttribute('href'), window.location.origin).href,
+                      anchorElement: linkElement,
+                      // ** 移除 tableRow, 高亮和捲動目標將動態查找 **
+                      originalIndex: globalRowIndex
+                    });
+                    globalRowIndex++;
+                  } catch (e) {
+                    console.error(`[自動播放][連結][窄] 處理連結 URL 時出錯:`, e, linkElement);
+                  }
                 } else {
-                  console.log(`[自動播放][偵錯][連結][窄] 在第二行 td:first-of-type 中未找到連結 ${linkSelector}`);
+                  // console.log(`[自動播放][偵錯][連結][窄] 在第二行 td:first-of-type 中未找到連結 ${linkSelector}`);
                 }
               } else {
-                console.log(`[自動播放][偵錯][連結][窄] 找不到第二行的第一個 td`);
+                // console.log(`[自動播放][偵錯][連結][窄] 找不到第二行的第一個 td`);
               }
             } else {
-              console.log(`[自動播放][偵錯][連結][窄] 第一行未找到標記`);
+              // console.log(`[自動播放][偵錯][連結][窄] 第一行未找到標記`);
             }
           } else {
-            console.log(`[自動播放][偵錯][連結][窄] 表格行數不足 (< 2)`);
+            // console.log(`[自動播放][偵錯][連結][窄] 表格行數不足 (< 2)`);
           }
         } else {
           console.warn("[自動播放][連結] 發現未知類型的可見表格:", table);
@@ -804,7 +922,7 @@
       stopButton.style.display = 'inline-block';
       statusDisplay.style.display = 'inline-block';
       updateStatusDisplay();
-      processLinksSequentially();
+      processLinksSequentially(); // 開始處理
     } else if (isPaused) {
       isPaused = false;
       pauseButton.textContent = '暫停';
@@ -889,11 +1007,7 @@
       statusDisplay.textContent = '';
     }
     if (rowHighlightTimeout) clearTimeout(rowHighlightTimeout);
-    document.querySelectorAll('.userscript-row-highlight').forEach(row => {
-      row.classList.remove('userscript-row-highlight');
-      row.style.backgroundColor = '';
-      row.style.transition = '';
-    });
+    document.querySelectorAll(`.${ROW_HIGHLIGHT_CLASS_MAIN}`).forEach(el => { el.classList.remove(ROW_HIGHLIGHT_CLASS_MAIN); el.style.backgroundColor = ''; el.style.transition = ''; });
     closeModal(); // 確保關閉 Modal
   }
   // 表格列播放按鈕點擊處理
@@ -977,7 +1091,7 @@
       } else {
         targetTd.insertBefore(button, targetTd.firstChild);
       }
-      console.log(`[自動播放][按鈕注入] 已為行 ${rowIndex + 1} 添加新按鈕。`);
+      // console.log(`[自動播放][按鈕注入] 已為行 ${rowIndex + 1} 添加新按鈕。`);
     }
   }
 
@@ -997,7 +1111,7 @@
       console.log("[自動播放] 未找到任何當前可見的結果表格，無法注入列播放按鈕。");
       return;
     }
-    console.log(`[自動播放] 找到 ${visibleTables.length} 個當前可見的結果表格。`);
+    // console.log(`[自動播放] 找到 ${visibleTables.length} 個當前可見的結果表格。`); // 可能過於頻繁
 
     // 添加懸停樣式
     const playButtonHoverStyle = `.userscript-row-play-button:hover { background-color: #218838 !important; }`;
@@ -1005,7 +1119,7 @@
 
     // ** 修改：先移除所有潛在的舊按鈕，再重新注入 **
     document.querySelectorAll(`${ALL_TABLES_SELECTOR} .userscript-row-play-button`).forEach(btn => btn.remove());
-    console.log("[自動播放][偵錯] 已移除所有舊的行播放按鈕。");
+    // console.log("[自動播放][偵錯] 已移除所有舊的行播放按鈕。"); // 可能過於頻繁
 
     let globalRowIndex = 0; // ** 維護一個基於可見且相關行的全局行索引 **
 
@@ -1014,14 +1128,14 @@
       const isNarrowTable = table.matches(NARROW_TABLE_SELECTOR);
       const rows = table.querySelectorAll('tbody tr');
       const tableId = `可見表格 ${tableIndex + 1} (${isWideTable ? '寬' : isNarrowTable ? '窄' : '未知'})`; // 用於日誌
-      console.log(`[自動播放][按鈕注入] ${tableId} 找到 ${rows.length} 行。`);
+      // console.log(`[自動播放][按鈕注入] ${tableId} 找到 ${rows.length} 行。`); // 可能過於頻繁
 
       if (isWideTable) {
         rows.forEach((row, rowIndexInTable) => {
           const firstTd = row.querySelector('td:first-of-type');
           if (firstTd && firstTd.querySelector('span.fw-normal')) {
             // 寬螢幕：按鈕注入此行
-            console.log(`[自動播放][按鈕注入][寬] ${tableId} - 行 ${rowIndexInTable + 1}: 找到標記，注入按鈕 (全局索引 ${globalRowIndex})。`);
+            // console.log(`[自動播放][按鈕注入][寬] ${tableId} - 行 ${rowIndexInTable + 1}: 找到標記，注入按鈕 (全局索引 ${globalRowIndex})。`);
             injectOrUpdateButton(row, firstTd, globalRowIndex);
             globalRowIndex++;
           } else {
@@ -1029,12 +1143,12 @@
           }
         });
       } else if (isNarrowTable) {
-        console.log(`[自動播放][按鈕注入][窄] ${tableId}: 開始檢查...`);
+        // console.log(`[自動播放][按鈕注入][窄] ${tableId}: 開始檢查...`);
         if (rows.length >= 1) { // 至少需要一行來放標記和按鈕
           const firstRow = rows[0];
           const firstRowTd = firstRow.querySelector('td:first-of-type');
           const hasMarker = firstRowTd && firstRowTd.querySelector('span.fw-normal');
-          console.log(`[自動播放][按鈕注入][窄] ${tableId} - 檢查第一行: ${firstRow ? '存在' : '不存在'}, 檢查第一行 td: ${firstRowTd ? '存在' : '不存在'}, 找到標記: ${hasMarker ? '是' : '否'}`);
+          // console.log(`[自動播放][按鈕注入][窄] ${tableId} - 檢查第一行: ${firstRow ? '存在' : '不存在'}, 檢查第一行 td: ${firstRowTd ? '存在' : '不存在'}, 找到標記: ${hasMarker ? '是' : '否'}`);
 
           if (hasMarker) {
             // 窄螢幕：按鈕注入第一行 (有標記的行)
@@ -1044,36 +1158,36 @@
             if (rows.length >= 2) {
               const secondRow = rows[1];
               const secondRowTd = secondRow.querySelector('td:first-of-type');
-              console.log(`[自動播放][按鈕注入][窄] ${tableId} - 檢查第二行: ${secondRow ? '存在' : '不存在'}, 檢查第二行 td: ${secondRowTd ? '存在' : '不存在'}`);
+              // console.log(`[自動播放][按鈕注入][窄] ${tableId} - 檢查第二行: ${secondRow ? '存在' : '不存在'}, 檢查第二行 td: ${secondRowTd ? '存在' : '不存在'}`);
               if (secondRowTd) {
                 // ** 修改：在第二行的 td 中尋找連結 **
                 const linkElement = secondRowTd.querySelector(getLinkSelector());
                 linkFoundInSecondRow = !!linkElement; // 轉換為布林值
-                console.log(`[自動播放][按鈕注入][窄] ${tableId} - 在第二行 td 中查找連結 (${getLinkSelector()}): ${linkFoundInSecondRow ? '找到' : '未找到'}`);
+                // console.log(`[自動播放][按鈕注入][窄] ${tableId} - 在第二行 td 中查找連結 (${getLinkSelector()}): ${linkFoundInSecondRow ? '找到' : '未找到'}`);
                 if (linkFoundInSecondRow) {
                   isValidNarrowEntry = true;
                 }
               }
             } else {
-              console.log(`[自動播放][按鈕注入][窄] ${tableId}: 行數不足 (< 2)，無法檢查第二行連結。`);
+              // console.log(`[自動播放][按鈕注入][窄] ${tableId}: 行數不足 (< 2)，無法檢查第二行連結。`);
             }
 
-            console.log(`[自動播放][按鈕注入][窄] ${tableId} - isValidNarrowEntry: ${isValidNarrowEntry}`);
+            // console.log(`[自動播放][按鈕注入][窄] ${tableId} - isValidNarrowEntry: ${isValidNarrowEntry}`);
             if (isValidNarrowEntry) {
-              console.log(`[自動播放][按鈕注入][窄] ${tableId} - 條件滿足，注入按鈕到第一行 (全局索引 ${globalRowIndex})。`);
+              // console.log(`[自動播放][按鈕注入][窄] ${tableId} - 條件滿足，注入按鈕到第一行 (全局索引 ${globalRowIndex})。`);
               injectOrUpdateButton(firstRow, firstRowTd, globalRowIndex);
               globalRowIndex++;
             } else {
-              console.log(`[自動播放][按鈕注入][窄] ${tableId} - 第一行有標記，但第二行無有效連結或不存在，不添加按鈕。`);
+              // console.log(`[自動播放][按鈕注入][窄] ${tableId} - 第一行有標記，但第二行無有效連結或不存在，不添加按鈕。`);
             }
           } else {
-            console.log(`[自動播放][按鈕注入][窄] ${tableId} - 第一行未找到標記，不處理此表格。`);
+            // console.log(`[自動播放][按鈕注入][窄] ${tableId} - 第一行未找到標記，不處理此表格。`);
           }
         } else {
-          console.log(`[自動播放][按鈕注入][窄] ${tableId}: 行數為 0，跳過。`);
+          // console.log(`[自動播放][按鈕注入][窄] ${tableId}: 行數為 0，跳過。`);
         }
       } else {
-        console.warn(`[自動播放][按鈕注入] ${tableId} 類型未知，跳過按鈕注入。`);
+        // console.warn(`[自動播放][按鈕注入] ${tableId} 類型未知，跳過按鈕注入。`);
       }
     });
     console.log(`[自動播放] 已處理 ${globalRowIndex} 個有效項目，注入或更新播放按鈕。`);
@@ -1144,7 +1258,7 @@
   function initialize() {
     if (window.autoPlayerInitialized) return;
     window.autoPlayerInitialized = true;
-    console.log("[自動播放] 初始化腳本 v4.9 ...");
+    console.log("[自動播放] 初始化腳本 v4.12 ...");
     ensureFontAwesome();
     addTriggerButton();
     // 初始注入按鈕
@@ -1156,8 +1270,21 @@
         // 使用 debounce 避免短時間內重複觸發
         clearTimeout(resizeDebounceTimeout);
         resizeDebounceTimeout = setTimeout(() => {
-          console.log("[自動播放][ResizeObserver] Debounced: 偵測到尺寸變化，重新注入按鈕...");
+          console.log("[自動播放][ResizeObserver] Debounced: 偵測到尺寸變化，重新注入按鈕並嘗試捲動...");
           injectRowPlayButtons();
+          // ** 修改：調用新的查找函數來捲動 **
+          const currentUrl = linksToProcess[currentLinkIndex]?.url;
+          if (currentUrl) {
+            const elementToScroll = findElementForLink(currentUrl);
+            if (elementToScroll) {
+              console.log("[自動播放][ResizeObserver] 找到元素，執行捲動:", elementToScroll);
+              elementToScroll.scrollIntoView({ behavior: 'smooth', block: 'center' }); // 改回 center
+            } else {
+              console.warn("[自動播放][ResizeObserver] 未找到元素進行捲動:", currentUrl);
+            }
+          } else {
+            console.log("[自動播放][ResizeObserver] 沒有當前連結 URL，不執行捲動。");
+          }
         }, RESIZE_DEBOUNCE_MS);
       });
 
@@ -1168,7 +1295,7 @@
     } catch (e) {
       console.error("[自動播放] 無法啟動 ResizeObserver:", e);
       // 作為後備，可以考慮監聽 window 的 resize 事件，但 ResizeObserver 通常更好
-      // window.addEventListener('resize', () => { ... debounce logic ... injectRowPlayButtons(); });
+      // window.addEventListener('resize', () => { ... debounce logic ... injectRowPlayButtons(); ... find and scroll ... });
     }
 
 
