@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.17
-// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.17: [除錯] 暫時簡化 TABLE_CONTAINER_SELECTOR 以排查容器移除問題，並增加日誌。**
+// @version      4.19
+// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.19: 修正 ALL_TABLES_SELECTOR 的選擇器組合邏輯，確保支援多種容器。**
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
 // @match        http*://sutian.moe.edu.tw/und-hani/hunlui/*
@@ -42,9 +42,12 @@
   const PAGINATION_PARAMS = ['iahbe', 'pitsoo']; // ** 可能需要根據實際情況調整分頁參數列表 **
   const AUTO_START_MAX_WAIT_MS = 10000; // 自動啟動時等待表格的最長時間
   const AUTO_START_CHECK_INTERVAL_MS = 500; // 自動啟動時檢查表格的間隔
-  // ** [除錯] 修改：暫時只使用使用者回報不會被移除的選擇器 **
-  const TABLE_CONTAINER_SELECTOR = 'main.container-fluid div.mb-5';
-  const ALL_TABLES_SELECTOR = `${TABLE_CONTAINER_SELECTOR} > table`;
+  // ** 恢復完整的選擇器 **
+  const TABLE_CONTAINER_SELECTOR = 'main.container-fluid div.mt-1.mb-5, main.container-fluid div.mt-1.mb-4, main.container-fluid div.mb-5';
+  // ** 修正：正確組合 ALL_TABLES_SELECTOR **
+  const ALL_TABLES_SELECTOR = TABLE_CONTAINER_SELECTOR.split(',')
+    .map(s => `${s.trim()} > table`)
+    .join(', ');
   const RELEVANT_ROW_MARKER_SELECTOR = 'td:first-of-type span.fw-normal';
   const WIDE_TABLE_SELECTOR = 'table.d-none.d-md-table';
   const NARROW_TABLE_SELECTOR = 'table.d-md-none';
@@ -797,29 +800,19 @@
 
   // ** 輔助函數，獲取當前可見的表格元素列表 **
   function getVisibleTables() {
-    // ** [除錯] 增加日誌，顯示正在使用的容器選擇器 **
-    console.log(`[自動播放][getVisibleTables] 使用容器選擇器: "${TABLE_CONTAINER_SELECTOR}"`);
-    const containers = document.querySelectorAll(TABLE_CONTAINER_SELECTOR);
-    console.log(`[自動播放][getVisibleTables] 找到 ${containers.length} 個符合條件的容器。`, containers);
-
-    // ** 使用更新後的 ALL_TABLES_SELECTOR **
+    // ** 恢復使用 ALL_TABLES_SELECTOR，移除除錯日誌 **
     const allTables = document.querySelectorAll(ALL_TABLES_SELECTOR);
-    console.log(`[自動播放][getVisibleTables] 使用表格選擇器: "${ALL_TABLES_SELECTOR}"`);
-    console.log(`[自動播放][getVisibleTables] 找到 ${allTables.length} 個潛在表格。`, allTables);
-
     const visibleTables = Array.from(allTables).filter(table => {
       try {
         // 檢查 display 和 visibility，確保表格是真的可見
         const style = window.getComputedStyle(table);
-        const isVisible = style.display !== 'none' && style.visibility !== 'hidden';
-        // console.log(`[自動播放][getVisibleTables] 檢查表格可見性:`, table, `isVisible: ${isVisible}`); // 可能過於頻繁
-        return isVisible;
+        return style.display !== 'none' && style.visibility !== 'hidden';
       } catch (e) {
-        console.error("[自動播放][getVisibleTables] 檢查表格可見性時出錯:", e, table);
+        console.error("[自動播放] 檢查表格可見性時出錯:", e, table);
         return false; // 出錯時視為不可見
       }
     });
-    console.log(`[自動播放][getVisibleTables] 過濾後得到 ${visibleTables.length} 個可見表格。`, visibleTables);
+    // console.log(`[自動播放] 找到 ${allTables.length} 個潛在表格，其中 ${visibleTables.length} 個當前可見。`);
     return visibleTables;
   }
 
@@ -834,7 +827,7 @@
       // ** 修改：區分表格類型來查找連結 **
       const visibleTables = getVisibleTables(); // ** 使用了更新後的選擇器 **
       if (visibleTables.length === 0) {
-        alert("頁面上揣無目前顯示的結果表格！(已簡化選擇器)"); // ** 更新提示訊息 **
+        alert("頁面上揣無目前顯示的結果表格！(已恢復完整選擇器)"); // ** 更新提示訊息 **
         return;
       }
 
@@ -912,7 +905,7 @@
 
 
       if (allLinks.length === 0) {
-        alert("目前顯示的表格內底揣無詞目連結 (已區分表格結構，已簡化選擇器)！"); // ** 更新提示訊息 **
+        alert("目前顯示的表格內底揣無詞目連結 (已區分表格結構，已恢復完整選擇器)！"); // ** 更新提示訊息 **
         return;
       }
       console.log(`[自動播放] 從 ${visibleTables.length} 個可見表格中根據結構找到 ${allLinks.length} 個連結。`);
@@ -1120,18 +1113,22 @@
   function injectRowPlayButtons() {
     const visibleTables = getVisibleTables(); // ** 使用了更新後的選擇器 **
     if (visibleTables.length === 0) {
-      console.log("[自動播放][injectRowPlayButtons] 未找到任何當前可見的結果表格，無法注入列播放按鈕。 (已簡化選擇器)"); // ** 更新提示訊息 **
+      console.log("[自動播放][injectRowPlayButtons] 未找到任何當前可見的結果表格，無法注入列播放按鈕。");
       return;
     }
-    // console.log(`[自動播放] 找到 ${visibleTables.length} 個當前可見的結果表格。`); // 可能過於頻繁
+    // console.log(`[自動播放] 找到 ${visibleTables.length} 個當前可見的結果表格。`);
 
     // 添加懸停樣式
     const playButtonHoverStyle = `.userscript-row-play-button:hover { background-color: #218838 !important; }`;
     GM_addStyle(playButtonHoverStyle);
 
-    // ** [除錯] 增加日誌，顯示移除按鈕時使用的選擇器 **
-    const removeSelector = `${ALL_TABLES_SELECTOR} .userscript-row-play-button`;
-    console.log(`[自動播放][injectRowPlayButtons] 準備移除舊按鈕，使用選擇器: "${removeSelector}"`);
+    // ** 修正：正確組合移除按鈕的選擇器 **
+    const buttonClass = 'userscript-row-play-button';
+    const containerSelectors = TABLE_CONTAINER_SELECTOR.split(',').map(s => s.trim());
+    const removeSelectorParts = containerSelectors.map(sel => `${sel} > table .${buttonClass}`);
+    const removeSelector = removeSelectorParts.join(', ');
+
+    console.log(`[自動播放][injectRowPlayButtons] 準備移除舊按鈕，使用修正後的選擇器: "${removeSelector}"`);
     const buttonsToRemove = document.querySelectorAll(removeSelector);
     console.log(`[自動播放][injectRowPlayButtons] 找到 ${buttonsToRemove.length} 個待移除的舊按鈕。`);
     buttonsToRemove.forEach(btn => btn.remove());
@@ -1274,7 +1271,7 @@
   function initialize() {
     if (window.autoPlayerInitialized) return;
     window.autoPlayerInitialized = true;
-    console.log("[自動播放] 初始化腳本 v4.17 ..."); // 更新版本號
+    console.log("[自動播放] 初始化腳本 v4.19 ..."); // 更新版本號
     ensureFontAwesome();
     addTriggerButton();
     // 初始注入按鈕
