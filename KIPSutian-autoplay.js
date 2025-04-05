@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.14
-// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.14: 擴充 TABLE_CONTAINER_SELECTOR 以包含 mb-4 和 mb-5。**
+// @version      4.16
+// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.16: 根據使用者回饋修正 TABLE_CONTAINER_SELECTOR 中的第三個選擇器 (移除 >)。**
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
 // @match        http*://sutian.moe.edu.tw/und-hani/hunlui/*
@@ -42,8 +42,8 @@
   const PAGINATION_PARAMS = ['iahbe', 'pitsoo']; // ** 可能需要根據實際情況調整分頁參數列表 **
   const AUTO_START_MAX_WAIT_MS = 10000; // 自動啟動時等待表格的最長時間
   const AUTO_START_CHECK_INTERVAL_MS = 500; // 自動啟動時檢查表格的間隔
-  // ** 修改：使用逗號分隔，匹配 mb-5 或 mb-4 **
-  const TABLE_CONTAINER_SELECTOR = 'main.container-fluid div.mt-1.mb-5, main.container-fluid div.mt-1.mb-4';
+  // ** 修改：修正第三個選擇器，移除 > **
+  const TABLE_CONTAINER_SELECTOR = 'main.container-fluid div.mt-1.mb-5, main.container-fluid div.mt-1.mb-4, main.container-fluid div.mb-5';
   const ALL_TABLES_SELECTOR = `${TABLE_CONTAINER_SELECTOR} > table`;
   const RELEVANT_ROW_MARKER_SELECTOR = 'td:first-of-type span.fw-normal';
   const WIDE_TABLE_SELECTOR = 'table.d-none.d-md-table';
@@ -555,7 +555,7 @@
     if (!targetUrl) return null;
 
     console.log(`[自動播放][查找元素] 尋找 URL: ${targetUrl}`);
-    const visibleTables = getVisibleTables();
+    const visibleTables = getVisibleTables(); // ** 使用了更新後的選擇器 **
     const linkSelector = getLinkSelector();
     let targetElement = null;
 
@@ -1261,7 +1261,7 @@
   function initialize() {
     if (window.autoPlayerInitialized) return;
     window.autoPlayerInitialized = true;
-    console.log("[自動播放] 初始化腳本 v4.14 ..."); // 更新版本號
+    console.log("[自動播放] 初始化腳本 v4.16 ..."); // 更新版本號
     ensureFontAwesome();
     addTriggerButton();
     // 初始注入按鈕
