@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.20
-// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.20: 加入 @exclude 規則以排除特定頁面。新增遮罩暫停時主頁面項目閃爍效果。**
+// @version      4.21
+// @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.21: 新增行動裝置自動播放前互動提示。**
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
 // @match        http*://sutian.moe.edu.tw/und-hani/hunlui/*
@@ -39,16 +39,18 @@
   const DELAY_BETWEEN_IFRAMES_MS = 200;
   const HIGHLIGHT_CLASS = 'userscript-audio-playing';
   const ROW_HIGHLIGHT_CLASS_MAIN = 'userscript-row-highlight'; // 主頁面高亮 class
-  const ROW_PAUSED_HIGHLIGHT_CLASS = 'userscript-row-paused-highlight'; // ** 新增：暫停時閃爍高亮 class **
-  const OVERLAY_ID = 'userscript-modal-overlay';
+  const ROW_PAUSED_HIGHLIGHT_CLASS = 'userscript-row-paused-highlight'; // 暫停時閃爍高亮 class
+  const OVERLAY_ID = 'userscript-modal-overlay'; // iframe 的背景遮罩 ID
+  const MOBILE_INTERACTION_BOX_ID = 'userscript-mobile-interaction-box'; // ** 修改：行動裝置互動提示 "框" 的 ID **
+  const MOBILE_BG_OVERLAY_ID = 'userscript-mobile-bg-overlay'; // ** 新增：行動裝置互動提示的 "背景遮罩" ID **
   const ROW_HIGHLIGHT_COLOR = 'rgba(0, 255, 0, 0.1)'; // 播放中高亮顏色 (淡綠)
   const ROW_HIGHLIGHT_DURATION = 1500;
   const FONT_AWESOME_URL = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css';
   const FONT_AWESOME_INTEGRITY = 'sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==';
   const AUTOPLAY_PARAM = 'autoplay';
-  const PAGINATION_PARAMS = ['iahbe', 'pitsoo']; // ** 可能需要根據實際情況調整分頁參數列表 **
-  const AUTO_START_MAX_WAIT_MS = 10000; // 自動啟動時等待表格的最長時間
-  const AUTO_START_CHECK_INTERVAL_MS = 500; // 自動啟動時檢查表格的間隔
+  const PAGINATION_PARAMS = ['iahbe', 'pitsoo'];
+  const AUTO_START_MAX_WAIT_MS = 10000;
+  const AUTO_START_CHECK_INTERVAL_MS = 500;
   const TABLE_CONTAINER_SELECTOR = 'main.container-fluid div.mt-1.mb-5, main.container-fluid div.mt-1.mb-4, main.container-fluid div.mb-5';
   const ALL_TABLES_SELECTOR = TABLE_CONTAINER_SELECTOR.split(',')
     .map(s => `${s.trim()} > table`)
@@ -56,19 +58,25 @@
   const RELEVANT_ROW_MARKER_SELECTOR = 'td:first-of-type span.fw-normal';
   const WIDE_TABLE_SELECTOR = 'table.d-none.d-md-table';
   const NARROW_TABLE_SELECTOR = 'table.d-md-none';
-  const RESIZE_DEBOUNCE_MS = 300; // ResizeObserver 的 debounce 延遲時間
+  const RESIZE_DEBOUNCE_MS = 300;
+  // ** 新增：行動裝置提示框顏色常數 **
+  const MOBILE_BOX_BG_COLOR = '#aa96b7'; // iMazinGrace 紫 (亮色)
+  const MOBILE_BOX_TEXT_COLOR = '#d9e2a9'; // iMazinGrace 綠 (亮色)
+  const MOBILE_BOX_BG_COLOR_DARK = '#4a4a8a'; // 提示框背景色 (暗色) - 深薰衣草紫
+  const MOBILE_BOX_TEXT_COLOR_DARK = '#EEEEEE'; // 提示框文字顏色 (暗色) - 淺灰
+  const MOBILE_BG_OVERLAY_COLOR = 'rgba(0, 0, 0, 0.6)'; // 背景遮罩顏色 (同 modal)
 
   // --- 適應亮暗模式的高亮樣式 ---
   const HIGHLIGHT_STYLE = `
-        /* 預設 (亮色模式) */
-        .${HIGHLIGHT_CLASS} { /* iframe 內按鈕高亮 */
+        /* iframe 內按鈕高亮 - 亮色模式 */
+        .${HIGHLIGHT_CLASS} {
             background-color: #FFF352 !important;
             color: black !important;
             outline: 2px solid #FFB800 !important;
             box-shadow: 0 0 10px #FFF352;
             transition: background-color 0.2s ease-in-out, outline 0.2s ease-in-out, color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
         }
-        /* 深色模式 */
+        /* iframe 內按鈕高亮 - 深色模式 */
         @media (prefers-color-scheme: dark) {
             .${HIGHLIGHT_CLASS} {
                 background-color: #66b3ff !important;
@@ -78,12 +86,13 @@
             }
         }
 
-        /* ** 新增：暫停時閃爍效果 ** */
+        /* 暫停時閃爍效果 - Keyframes */
         @keyframes userscriptPulseHighlight {
             0% { background-color: rgba(255, 193, 7, 0.2); } /* 黃色，較淡 */
             50% { background-color: rgba(255, 193, 7, 0.4); } /* 黃色，較深 */
             100% { background-color: rgba(255, 193, 7, 0.2); } /* 回到較淡 */
         }
+        /* 暫停時閃爍效果 - Keyframes (深色模式) */
         @media (prefers-color-scheme: dark) {
              @keyframes userscriptPulseHighlight {
                 0% { background-color: rgba(102, 179, 255, 0.3); } /* 藍色，較淡 */
@@ -91,8 +100,40 @@
                 100% { background-color: rgba(102, 179, 255, 0.3); } /* 回到較淡 */
             }
         }
+        /* 暫停時閃爍效果 - Class */
         .${ROW_PAUSED_HIGHLIGHT_CLASS} {
             animation: userscriptPulseHighlight 1.5s ease-in-out infinite;
+        }
+
+        /* 行動裝置互動 "背景遮罩" 樣式 */
+        #${MOBILE_BG_OVERLAY_ID} {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background-color: ${MOBILE_BG_OVERLAY_COLOR}; /* 使用常數 */
+            z-index: 10004; /* 比提示框低一層 */
+            cursor: pointer; /* 讓背景也可點擊 */
+        }
+
+        /* 行動裝置互動 "提示框" 樣式 (亮色模式) */
+        #${MOBILE_INTERACTION_BOX_ID} {
+            position: fixed; /* 由 JS 設定 top/left/transform/width/height */
+            background-color: ${MOBILE_BOX_BG_COLOR}; /* 使用常數 */
+            color: ${MOBILE_BOX_TEXT_COLOR}; /* 使用常數 */
+            display: flex; justify-content: center; align-items: center;
+            font-size: 10vw; /* 調整字體大小以適應框體 */
+            font-weight: bold; text-align: center;
+            z-index: 10005; /* 比背景遮罩高 */
+            cursor: pointer;
+            padding: 20px;
+            box-sizing: border-box;
+            border-radius: 8px; /* 同 modal */
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3); /* 同 modal */
+        }
+        /* 行動裝置互動 "提示框" 樣式 (深色模式) */
+        @media (prefers-color-scheme: dark) {
+            #${MOBILE_INTERACTION_BOX_ID} {
+                background-color: ${MOBILE_BOX_BG_COLOR_DARK}; /* 使用常數 */
+                 color: ${MOBILE_BOX_TEXT_COLOR_DARK}; /* 使用常數 */
+             }
         }
     `;
   // --- 配置結束 ---
@@ -104,17 +145,18 @@
   let totalLinks = 0;
   let currentSleepController = null;
   let currentIframe = null;
-  let linksToProcess = []; // ** 注意：現在不儲存 tableRow **
+  let linksToProcess = [];
   let rowHighlightTimeout = null;
-  let resizeDebounceTimeout = null; // 用於 ResizeObserver 的 debounce
-  let currentPausedHighlightElement = null; // ** 新增：用於追蹤暫停時要閃爍的元素 **
+  let resizeDebounceTimeout = null;
+  let currentPausedHighlightElement = null; // 用於追蹤暫停時要閃爍的元素
+  let isMobile = false; // 是否為行動裝置標記
 
   // --- UI 元素引用 ---
   let startButton;
   let pauseButton;
   let stopButton;
   let statusDisplay;
-  let overlayElement = null;
+  let overlayElement = null; // iframe 的遮罩
 
   // --- Helper 函數 ---
 
@@ -180,7 +222,7 @@
         clearTimeout(timer);
         audio.removeEventListener('loadedmetadata', onLoadedMetadata);
         audio.removeEventListener('error', onError);
-        audio.src = '';
+        audio.src = ''; // 釋放資源
       };
       const onLoadedMetadata = () => {
         if (audio.duration && isFinite(audio.duration)) {
@@ -223,39 +265,26 @@
     }
   }
 
-  // 背景遮罩點擊事件處理函數
+  // 背景遮罩點擊事件處理函數 (用於 iframe modal)
   function handleOverlayClick(event) {
-    if (event.target !== overlayElement) {
-      console.log("[自動播放][偵錯] 點擊事件目標不是遮罩本身，忽略。", event.target);
-      return;
-    }
-    console.log(`[自動播放][偵錯] handleOverlayClick 觸發。isProcessing: ${isProcessing}, isPaused: ${isPaused}, currentIframe: ${currentIframe ? currentIframe.id : 'null'}`);
+    if (event.target !== overlayElement) return; // 確保點擊的是遮罩本身
     if (isProcessing && !isPaused) {
       console.log("[自動播放] 點擊背景遮罩，觸發暫停並關閉 Modal。");
       isPaused = true;
       pauseButton.textContent = '繼續';
       updateStatusDisplay();
-      if (currentSleepController) {
-        console.log("[自動播放][偵錯] 正在取消當前的 sleep...");
-        currentSleepController.cancel('paused_overlay');
-      } else {
-        console.log("[自動播放][偵錯] 點擊遮罩時沒有正在進行的 sleep 可取消。");
-      }
-      // ** 新增：添加暫停閃爍效果 **
+      if (currentSleepController) currentSleepController.cancel('paused_overlay');
+      // 添加暫停閃爍效果
       if (currentPausedHighlightElement) {
-        console.log("[自動播放] 為暫停目標添加閃爍效果:", currentPausedHighlightElement);
         currentPausedHighlightElement.classList.add(ROW_PAUSED_HIGHLIGHT_CLASS);
-      } else {
-        console.warn("[自動播放] 點擊遮罩暫停，但找不到當前高亮目標元素。");
-      }
+      } else { console.warn("[自動播放] 點擊遮罩暫停，但找不到當前高亮目標元素。"); }
       closeModal();
-    } else {
-      console.log("[自動播放][偵錯] 點擊遮罩，但條件不滿足 (isProcessing 或 isPaused 狀態不對)。");
     }
   }
 
   // 顯示 Modal (Iframe + Overlay)
   function showModal(iframe) {
+    // 確保 iframe 遮罩存在
     overlayElement = document.getElementById(OVERLAY_ID);
     if (!overlayElement) {
       overlayElement = document.createElement('div');
@@ -265,19 +294,16 @@
       overlayElement.style.left = '0';
       overlayElement.style.width = '100vw';
       overlayElement.style.height = '100vh';
-      overlayElement.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
+      overlayElement.style.backgroundColor = MOBILE_BG_OVERLAY_COLOR; // 使用統一的背景遮罩顏色
       overlayElement.style.zIndex = '9998';
       overlayElement.style.cursor = 'pointer';
       document.body.appendChild(overlayElement);
-      console.log("[自動播放][偵錯] 已創建背景遮罩元素。");
-    } else {
-      console.log("[自動播放][偵錯] 背景遮罩元素已存在。");
     }
+    // 重新綁定事件
     overlayElement.removeEventListener('click', handleOverlayClick);
-    console.log("[自動播放][偵錯] 已嘗試移除舊的遮罩點擊監聽器。");
     overlayElement.addEventListener('click', handleOverlayClick);
-    console.log("[自動播放][偵錯] 已添加新的遮罩點擊監聽器。");
 
+    // 設定 iframe 樣式並添加到 body
     iframe.style.position = 'fixed';
     iframe.style.width = MODAL_WIDTH;
     iframe.style.height = MODAL_HEIGHT;
@@ -298,40 +324,24 @@
 
   // 增強關閉 Modal (Iframe + Overlay) 的健壯性
   function closeModal() {
-    console.log(`[自動播放][偵錯] closeModal 被調用。 currentIframe: ${currentIframe ? currentIframe.id : 'null'}, overlayElement: ${overlayElement ? 'exists' : 'null'}`);
-    if (currentIframe && currentIframe.parentNode) {
-      currentIframe.remove();
-      console.log("[自動播放] 已移除 iframe");
-    } else if (currentIframe) {
-      console.log("[自動播放][偵錯] 嘗試移除 iframe 時，它已不在 DOM 中。");
-    }
-    currentIframe = null; // 清除 iframe 引用
-
+    // 移除 iframe
+    if (currentIframe && currentIframe.parentNode) currentIframe.remove();
+    currentIframe = null;
+    // 移除遮罩
     if (overlayElement) {
-      overlayElement.removeEventListener('click', handleOverlayClick); // 嘗試移除監聽器
-      if (overlayElement.parentNode) { // 檢查 overlayElement 是否仍在 DOM 中
-        overlayElement.remove();
-        console.log("[自動播放][偵錯] 已移除背景遮罩及其點擊監聽器。");
-      } else {
-        console.log("[自動播放][偵錯] 嘗試移除遮罩時，它已不在 DOM 中。");
-      }
-      overlayElement = null; // 清除遮罩引用
-    } else {
-      console.log("[自動播放][偵錯] 嘗試關閉 Modal 時，overlayElement 引用已為 null 或未找到元素。");
+      overlayElement.removeEventListener('click', handleOverlayClick);
+      if (overlayElement.parentNode) overlayElement.remove();
+      overlayElement = null;
     }
-
-    if (currentSleepController) {
-      console.log("[自動播放] 關閉 Modal 時取消正在進行的 sleep");
-      currentSleepController.cancel('modal_closed');
-      currentSleepController = null;
-    }
+    // 取消 sleep
+    if (currentSleepController) { currentSleepController.cancel('modal_closed'); currentSleepController = null; }
   }
 
   // 提取處理 iframe 內容的邏輯
   async function handleIframeContent(iframe, url, linkIndexInCurrentList) {
     let iframeDoc;
     try {
-      await sleep(150); // 等待可能的初始化
+      await sleep(150);
       iframeDoc = iframe.contentWindow.document;
       addStyleToIframe(iframeDoc, HIGHLIGHT_STYLE);
 
@@ -340,309 +350,98 @@
 
       if (audioButtons.length > 0) {
         for (let i = 0; i < audioButtons.length; i++) {
-          console.log(`[自動播放][偵錯] 進入音檔循環 ${i + 1}。 isProcessing: ${isProcessing}, isPaused: ${isPaused}`);
-          if (!isProcessing) {
-            console.log("[自動播放] 播放音檔前檢測到停止");
-            break; // 跳出音檔循環
-          }
-          // ** 關鍵的暫停等待循環 **
-          while (isPaused && isProcessing) {
-            console.log(`[自動播放] 音檔循環 ${i + 1} 偵測到暫停，等待繼續...`);
-            updateStatusDisplay();
-            await sleep(500); // 使用普通 sleep，因為 interruptibleSleep 會被外部取消
-            // 在等待後再次檢查 isProcessing，以防在暫停時被停止
-            if (!isProcessing) {
-              console.log("[自動播放] 在暫停等待期間檢測到停止");
-              break; // 跳出 while 和 for 循環
-            }
-          }
-          if (!isProcessing) { // 如果在暫停時停止，跳出 for 循環
-            break;
-          }
-          // ** 再次檢查 isPaused，因為可能在 sleep(500) 期間狀態改變了 **
-          if (isPaused) {
-            console.log(`[自動播放][偵錯] sleep(500) 後仍然是暫停狀態，繼續等待。`);
-            i--; // 回到同一個按鈕，以便下次循環重新檢查
-            continue;
-          }
-          // --- 狀態檢查結束 ---
+          if (!isProcessing) { console.log("[自動播放] 播放音檔前檢測到停止"); break; }
+          while (isPaused && isProcessing) { await sleep(500); if (!isProcessing) break; } // 處理暫停
+          if (!isProcessing || isPaused) { i--; continue; } // 再次檢查
 
           const button = audioButtons[i];
-          if (!button || !iframeDoc.body.contains(button)) {
-            console.warn(`[自動播放] 按鈕 ${i + 1} 失效，跳過。`);
-            continue;
-          }
+          if (!button || !iframeDoc.body.contains(button)) { console.warn(`[自動播放] 按鈕 ${i + 1} 失效，跳過。`); continue; }
           console.log(`[自動播放] 準備播放 iframe 中的第 ${i + 1} 個音檔`);
 
-          // --- data-src 解析 ---
+          // 解析音檔 URL 並獲取時長
           let actualDelayMs = FALLBACK_DELAY_MS;
           let audioSrc = null;
           let audioPath = null;
           const srcString = button.dataset.src;
           if (srcString) {
-            try {
-              const parsedData = JSON.parse(srcString.replace(/&quot;/g, '"'));
-              if (Array.isArray(parsedData) && parsedData.length > 0 && typeof parsedData[0] === 'string') {
-                audioPath = parsedData[0];
-              }
-            } catch (e) {
-              if (typeof srcString === 'string' && srcString.trim().startsWith('/')) {
-                audioPath = srcString.trim();
-              }
-            }
+            try { const d = JSON.parse(srcString.replace(/&quot;/g, '"')); if (Array.isArray(d) && d.length > 0 && typeof d[0] === 'string') audioPath = d[0]; } catch (e) { if (typeof srcString === 'string' && srcString.trim().startsWith('/')) audioPath = srcString.trim(); }
           }
-          if (audioPath) {
-            try {
-              const base = iframe.contentWindow.location.href;
-              audioSrc = new URL(audioPath, base).href;
-            } catch (urlError) {
-              audioSrc = null;
-            }
-          } else {
-            audioSrc = null;
-          }
+          if (audioPath) { try { audioSrc = new URL(audioPath, iframe.contentWindow.location.href).href; } catch (urlError) { audioSrc = null; } } else { audioSrc = null; }
           actualDelayMs = await getAudioDuration(audioSrc);
-          // --- 解析結束 ---
 
-          // --- **修改：決定 iframe 內部捲動目標** ---
-          let scrollTargetElement = button; // 預設捲動到按鈕本身
-          const flexContainer = button.closest('div.d-flex.flex-row.align-items-baseline');
-          const fs6Container = button.closest('div.mb-0.fs-6');
+          // 決定 iframe 內部捲動目標
+          let scrollTargetElement = button;
+          const flexContainer = button.closest('div.d-flex.flex-row.align-items-baseline'), fs6Container = button.closest('div.mb-0.fs-6');
+          if (flexContainer) { const h = iframeDoc.querySelector('h1#main'); if (h) scrollTargetElement = h; } else if (fs6Container) { const p = fs6Container.previousElementSibling; if (p && p.matches('span.mb-0')) scrollTargetElement = p; }
+          if (scrollTargetElement && iframeDoc.body.contains(scrollTargetElement)) scrollTargetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          await sleep(300);
 
-          if (flexContainer) {
-            // 情況 1: 嘗試尋找前面的 h1#main (使用者已更新)
-            const mainHeading = iframeDoc.querySelector('h1#main'); // 使用 ID 選擇器
-            if (mainHeading) {
-              console.log("[自動播放][Iframe捲動] 找到 flex container，嘗試捲動到 h1#main");
-              scrollTargetElement = mainHeading;
-            } else {
-              console.log("[自動播放][Iframe捲動] 找到 flex container，但未找到 h1#main，捲動到按鈕");
-            }
-          } else if (fs6Container) {
-            // 情況 2: 嘗試尋找前面的 span.mb-0
-            const precedingSpan = fs6Container.previousElementSibling;
-            if (precedingSpan && precedingSpan.matches('span.mb-0')) {
-              console.log("[自動播放][Iframe捲動] 找到 fs6 container，嘗試捲動到前面的 span.mb-0");
-              scrollTargetElement = precedingSpan;
-            } else {
-              console.log("[自動播放][Iframe捲動] 找到 fs6 container，但未找到前面的 span.mb-0，捲動到按鈕");
-            }
-          } else {
-            console.log("[自動播放][Iframe捲動] 未匹配特殊容器，捲動到按鈕");
-          }
+          // 高亮、點擊、等待
+          button.classList.add(HIGHLIGHT_CLASS); button.click(); console.log(`[自動播放] 已點擊按鈕 ${i + 1}，等待 ${actualDelayMs}ms`);
+          try { await interruptibleSleep(actualDelayMs).promise; } catch (error) { if (error.isCancellation) { if (iframeDoc.body.contains(button)) button.classList.remove(HIGHLIGHT_CLASS); break; } else { throw error; } } finally { currentSleepController = null; }
+          if (iframeDoc.body.contains(button)) button.classList.remove(HIGHLIGHT_CLASS);
+          if (!isProcessing) break;
 
-          if (scrollTargetElement && iframeDoc.body.contains(scrollTargetElement)) {
-            scrollTargetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            console.log("[自動播放][Iframe捲動] 已執行捲動到目標:", scrollTargetElement);
-          } else {
-            console.warn("[自動播放][Iframe捲動] 捲動目標無效或不存在:", scrollTargetElement);
-          }
-          // --- 捲動邏輯結束 ---
-
-          await sleep(300); // 等待捲動完成
-
-          button.classList.add(HIGHLIGHT_CLASS);
-          button.click();
-          console.log(`[自動播放] 已點擊按鈕 ${i + 1}，等待 ${actualDelayMs}ms`);
-
-          // --- 可中斷 sleep ---
-          try {
-            const sleepController = interruptibleSleep(actualDelayMs);
-            await sleepController.promise;
-          } catch (error) {
-            if (error.isCancellation) {
-              console.log(`[自動播放] 等待音檔 ${i + 1} 被 '${error.reason}' 中斷。`);
-              if (iframeDoc.body.contains(button)) {
-                button.classList.remove(HIGHLIGHT_CLASS);
-              }
-              break; // 跳出音檔循環
-            } else {
-              console.error("[自動播放] interruptibleSleep 發生意外錯誤:", error);
-              // 可以選擇繼續或終止
-            }
-          } finally {
-            currentSleepController = null; // 清理控制器引用
-          }
-          // --- 中斷 sleep 結束 ---
-
-          if (iframeDoc.body.contains(button) && button.classList.contains(HIGHLIGHT_CLASS)) {
-            button.classList.remove(HIGHLIGHT_CLASS);
-          }
-
-          if (!isProcessing) { // 檢查 sleep 後是否被停止
-            break;
-          }
-
-          // --- 按鈕間等待 (可中斷) ---
+          // 按鈕間等待
           if (i < audioButtons.length - 1) {
-            console.log(`[自動播放] 播放下一個前等待 ${DELAY_BETWEEN_CLICKS_MS}ms`);
-            try {
-              const sleepController = interruptibleSleep(DELAY_BETWEEN_CLICKS_MS);
-              await sleepController.promise;
-            } catch (error) {
-              if (error.isCancellation) {
-                console.log(`[自動播放] 按鈕間等待被 '${error.reason}' 中斷。`);
-                break; // 跳出音檔循環
-              } else {
-                throw error; // 重新拋出其他錯誤
-              }
-            } finally {
-              currentSleepController = null;
-            }
+            try { await interruptibleSleep(DELAY_BETWEEN_CLICKS_MS).promise; } catch (error) { if (error.isCancellation) break; else throw error; } finally { currentSleepController = null; }
           }
-          // --- 按鈕間等待結束 ---
-
-          if (!isProcessing) { // 再次檢查狀態
-            break;
-          }
-        } // --- for audioButtons loop end ---
-      } else {
-        console.log(`[自動播放] Iframe ${url} 中未找到播放按鈕`);
-        await sleep(1000); // 讓使用者看一下空白內容
-      }
-    } catch (error) {
-      console.error(`[自動播放] 處理 iframe 內容時出錯 (${url}):`, error);
-    } finally {
-      console.log(`[自動播放][偵錯] handleIframeContent finally 區塊。 isProcessing: ${isProcessing}, isPaused: ${isPaused}, currentIframe: ${currentIframe ? currentIframe.id : 'null'}`);
-      // 清理 sleep controller
-      if (currentSleepController) {
-        console.warn("[自動播放][偵錯] handleIframeContent 結束時 currentSleepController 仍存在，強制清除。");
-        currentSleepController.cancel('content_handled_exit');
-        currentSleepController = null;
-      }
-      // **不再在這裡判斷 isPaused 或 isProcessing 來關閉 Modal**
-    }
+          if (!isProcessing) break;
+        }
+      } else { console.log(`[自動播放] Iframe ${url} 中未找到播放按鈕`); await sleep(1000); }
+    } catch (error) { console.error(`[自動播放] 處理 iframe 內容時出錯 (${url}):`, error); } finally { if (currentSleepController) { currentSleepController.cancel('content_handled_exit'); currentSleepController = null; } }
   }
 
   // 處理單一連結的入口函數
   async function processSingleLink(url, linkIndexInCurrentList) {
     console.log(`[自動播放] processSingleLink 開始: 列表索引 ${linkIndexInCurrentList} (第 ${linkIndexInCurrentList + 1} / ${totalLinks} 項) - ${url}. isProcessing: ${isProcessing}, isPaused: ${isPaused}`);
     const iframeId = `auto-play-iframe-${Date.now()}`;
-    let iframe = document.createElement('iframe'); // 使用 let 允許重新賦值
+    let iframe = document.createElement('iframe');
     iframe.id = iframeId;
 
     return new Promise(async (resolve) => {
-      if (!isProcessing) {
-        console.log("[自動播放][偵錯] processSingleLink 開始時 isProcessing 為 false，直接返回。");
-        resolve();
-        return;
-      }
-
+      if (!isProcessing) { resolve(); return; }
       let isUsingExistingIframe = false;
-      if (!currentIframe) {
-        console.log("[自動播放][偵錯] currentIframe 為 null，顯示新 Modal。");
-        showModal(iframe);
+      if (currentIframe && currentIframe.contentWindow && currentIframe.contentWindow.location.href === url) {
+        iframe = currentIframe; isUsingExistingIframe = true;
       } else {
-        console.log("[自動播放][偵錯] currentIframe 已存在。");
-        // 檢查 URL 是否匹配，決定是否重用或重新加載
-        if (currentIframe.contentWindow && currentIframe.contentWindow.location.href === url) {
-          console.log("[自動播放][偵錯] URL 匹配，繼續使用現有 iframe (按鈕暫停恢復)。");
-          iframe = currentIframe; // ** 關鍵：使用現有的 iframe 引用 **
-          isUsingExistingIframe = true;
-        } else {
-          console.warn("[自動播放][偵錯] currentIframe 存在但 URL 不匹配或無法訪問！強制關閉並重新打開。");
-          closeModal();
-          await sleep(50); // 短暫等待確保關閉完成
-          if (!isProcessing) { resolve(); return; } // 再次檢查狀態
-          showModal(iframe); // 顯示新的 iframe
-        }
+        if (currentIframe) { closeModal(); await sleep(50); if (!isProcessing) { resolve(); return; } }
+        showModal(iframe);
       }
 
-      // 如果是使用現有 iframe (按鈕暫停恢復)，onload 不會觸發，直接執行處理邏輯
-      if (isUsingExistingIframe) {
-        console.log("[自動播放][偵錯] 直接處理現有 iframe 的內容。");
-        await handleIframeContent(iframe, url, linkIndexInCurrentList); // 處理內容
-        resolve(); // ** 在這裡 resolve **
-      } else {
-        // 如果是新 iframe，設置 onload 和 onerror
-        iframe.onload = async () => {
-          console.log(`[自動播放] Iframe 載入完成: ${url}. isProcessing: ${isProcessing}, isPaused: ${isPaused}`);
-          if (!isProcessing) {
-            console.log("[自動播放] Iframe 載入時發現已停止，關閉 Modal");
-            closeModal();
-            resolve(); // ** 在這裡 resolve **
-            return;
-          }
-          // 再次檢查 iframe 引用是否仍然是當前的
-          if (currentIframe !== iframe) {
-            console.warn(`[自動播放][偵錯] Iframe onload 觸發，但 currentIframe (${currentIframe ? currentIframe.id : 'null'}) 與當前 iframe (${iframe.id}) 不符！中止此 iframe 處理。`);
-            resolve(); // ** 在這裡 resolve **
-            return;
-          }
-          await handleIframeContent(iframe, url, linkIndexInCurrentList); // 處理內容
-          resolve(); // ** 在這裡 resolve **
-        };
-        iframe.onerror = (error) => {
-          console.error(`[自動播放] Iframe 載入失敗 (${url}):`, error);
-          closeModal();
-          resolve(); // ** 在這裡 resolve **
-        };
-        iframe.src = url; // 設置 src 開始加載
+      if (isUsingExistingIframe) { await handleIframeContent(iframe, url, linkIndexInCurrentList); resolve(); }
+      else {
+        iframe.onload = async () => { if (!isProcessing) { closeModal(); resolve(); return; } if (currentIframe !== iframe) { resolve(); return; } await handleIframeContent(iframe, url, linkIndexInCurrentList); resolve(); };
+        iframe.onerror = (error) => { console.error(`[自動播放] Iframe 載入失敗 (${url}):`, error); closeModal(); resolve(); };
+        iframe.src = url;
       }
-      // ** 將 resolve 移到 onload/onerror 或 isUsingExistingIframe 處理完畢後 **
     });
   }
 
-  // ** 修改：輔助函數，根據 URL 查找對應的主頁面元素 (td 或 table) **
+  // 輔助函數，根據 URL 查找對應的主頁面元素 (td 或 table)
   function findElementForLink(targetUrl) {
     if (!targetUrl) return null;
-
-    console.log(`[自動播放][查找元素] 尋找 URL: ${targetUrl}`);
-    const visibleTables = getVisibleTables(); // ** 使用了更新後的選擇器 **
-    const linkSelector = getLinkSelector();
-    let targetElement = null;
-
+    const visibleTables = getVisibleTables(); const linkSelector = getLinkSelector(); let targetElement = null;
     for (const table of visibleTables) {
-      const isWideTable = table.matches(WIDE_TABLE_SELECTOR);
-      const isNarrowTable = table.matches(NARROW_TABLE_SELECTOR);
-      const rows = table.querySelectorAll('tbody tr');
-      // console.log(`[自動播放][查找元素] 檢查 ${isWideTable ? '寬' : isNarrowTable ? '窄' : '未知'} 表格...`);
-
+      const isWideTable = table.matches(WIDE_TABLE_SELECTOR), isNarrowTable = table.matches(NARROW_TABLE_SELECTOR); const rows = table.querySelectorAll('tbody tr');
       if (isWideTable) {
         for (const row of rows) {
           const firstTd = row.querySelector('td:first-of-type');
-          if (firstTd && firstTd.querySelector('span.fw-normal')) {
+          if (firstTd && firstTd.querySelector(RELEVANT_ROW_MARKER_SELECTOR)) {
             const linkElement = row.querySelector(linkSelector);
-            if (linkElement) {
-              try {
-                const linkHref = new URL(linkElement.getAttribute('href'), window.location.origin).href;
-                if (linkHref === targetUrl) {
-                  // ** 修改：寬螢幕目標改為第一個 td **
-                  targetElement = firstTd;
-                  console.log("[自動播放][查找元素][寬] 找到對應 td:", targetElement);
-                  break;
-                }
-              } catch (e) {
-                console.error(`[自動播放][查找元素][寬] 處理連結 URL 時出錯:`, e, linkElement);
-              }
-            }
+            if (linkElement) { try { const linkHref = new URL(linkElement.getAttribute('href'), window.location.origin).href; if (linkHref === targetUrl) { targetElement = firstTd; break; } } catch (e) { console.error(`[自動播放][查找元素][寬] 處理連結 URL 時出錯:`, e, linkElement); } }
           }
         }
       } else if (isNarrowTable && rows.length >= 2) {
-        const firstRowTd = rows[0].querySelector('td:first-of-type');
-        const secondRowTd = rows[1].querySelector('td:first-of-type');
-        if (firstRowTd && firstRowTd.querySelector('span.fw-normal') && secondRowTd) {
+        const firstRowTd = rows[0].querySelector('td:first-of-type'), secondRowTd = rows[1].querySelector('td:first-of-type');
+        if (firstRowTd && firstRowTd.querySelector(RELEVANT_ROW_MARKER_SELECTOR) && secondRowTd) {
           const linkElement = secondRowTd.querySelector(linkSelector);
-          if (linkElement) {
-            try {
-              const linkHref = new URL(linkElement.getAttribute('href'), window.location.origin).href;
-              if (linkHref === targetUrl) {
-                targetElement = table; // 窄螢幕目標是 table
-                console.log("[自動播放][查找元素][窄] 找到對應 table:", targetElement);
-                break;
-              }
-            } catch (e) {
-              console.error(`[自動播放][查找元素][窄] 處理連結 URL 時出錯:`, e, linkElement);
-            }
-          }
+          if (linkElement) { try { const linkHref = new URL(linkElement.getAttribute('href'), window.location.origin).href; if (linkHref === targetUrl) { targetElement = table; break; } } catch (e) { console.error(`[自動播放][查找元素][窄] 處理連結 URL 時出錯:`, e, linkElement); } }
         }
       }
-      if (targetElement) break; // 找到就跳出外層循環
+      if (targetElement) break;
     }
-
-    if (!targetElement) {
-      console.warn(`[自動播放][查找元素] 未能找到 URL 對應的元素: ${targetUrl}`);
-    }
+    if (!targetElement) console.warn(`[自動播放][查找元素] 未能找到 URL 對應的元素: ${targetUrl}`);
     return targetElement;
   }
 
@@ -651,544 +450,260 @@
   async function processLinksSequentially() {
     console.log("[自動播放] processLinksSequentially 開始");
     while (currentLinkIndex < totalLinks && isProcessing) {
-      // ** 關鍵的暫停等待循環 **
-      while (isPaused && isProcessing) {
-        console.log(`[自動播放] 主流程已暫停 (索引 ${currentLinkIndex})，等待繼續...`);
-        updateStatusDisplay();
-        await sleep(500); // 使用普通 sleep
-        if (!isProcessing) { // 檢查在暫停等待期間是否被停止
-          break;
-        }
-      }
-      if (!isProcessing) { // 如果在暫停時停止，跳出主循環
-        break;
-      }
+      // 處理暫停
+      while (isPaused && isProcessing) { await sleep(500); if (!isProcessing) break; }
+      if (!isProcessing) break;
 
       updateStatusDisplay();
-      const linkInfo = linksToProcess[currentLinkIndex]; // ** 注意：linkInfo 不再包含 tableRow **
+      const linkInfo = linksToProcess[currentLinkIndex];
       console.log(`[自動播放] 準備處理連結 ${currentLinkIndex + 1}/${totalLinks} (全局索引 ${linkInfo.originalIndex}) - URL: ${linkInfo.url}`);
 
-      // --- **修改：動態查找、捲動和高亮主頁面元素** ---
-      const targetElement = findElementForLink(linkInfo.url); // 返回 td 或 table
-      let highlightTarget = null; // ** 修改：明確高亮目標 (tr) **
+      // --- 查找、捲動和高亮主頁面元素 ---
+      const targetElement = findElementForLink(linkInfo.url);
+      let highlightTarget = null;
 
-      // ** 修改：移除所有可能殘留的高亮 (包括常規和暫停) **
+      // 清除之前的任何高亮效果
+      if (rowHighlightTimeout) { clearTimeout(rowHighlightTimeout); rowHighlightTimeout = null; }
       document.querySelectorAll(`.${ROW_HIGHLIGHT_CLASS_MAIN}, .${ROW_PAUSED_HIGHLIGHT_CLASS}`).forEach(el => {
         el.classList.remove(ROW_HIGHLIGHT_CLASS_MAIN, ROW_PAUSED_HIGHLIGHT_CLASS);
-        el.style.backgroundColor = '';
-        el.style.transition = '';
-        el.style.animation = ''; // 移除動畫樣式
+        el.style.backgroundColor = ''; el.style.transition = ''; el.style.animation = '';
       });
-      currentPausedHighlightElement = null; // ** 清除舊的暫停目標 **
-      if (rowHighlightTimeout) {
-        clearTimeout(rowHighlightTimeout);
-        rowHighlightTimeout = null;
-      }
-
+      currentPausedHighlightElement = null; // 清除舊的暫停目標
 
       if (targetElement) {
-        // ** 修改：根據寬窄螢幕確定高亮目標 (tr 或 table 的第一個 tr) **
-        if (targetElement.tagName === 'TD') { // 寬螢幕 TD
-          highlightTarget = targetElement.closest('tr');
-        } else if (targetElement.tagName === 'TABLE') { // 窄螢幕 TABLE
-          highlightTarget = targetElement.querySelector('tbody tr:first-of-type');
-        }
+        // 確定高亮目標 (tr)
+        if (targetElement.tagName === 'TD') { highlightTarget = targetElement.closest('tr'); }
+        else if (targetElement.tagName === 'TABLE') { highlightTarget = targetElement.querySelector('tbody tr:first-of-type'); }
         console.log(`[自動播放][主頁捲動/高亮] 正在處理項目 ${linkInfo.originalIndex + 1} 對應的元素`, targetElement, `高亮目標:`, highlightTarget);
 
-        // ** 修改：捲動目標為找到的 targetElement (td 或 table) **
-        targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' }); // 改回 center 試試
-        await sleep(300); // 等待捲動基本完成
+        // 捲動到目標元素
+        targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await sleep(300);
 
-        // ** 修改：高亮目標為確定後的 highlightTarget (tr) **
+        // 應用常規高亮
         if (highlightTarget) {
           highlightTarget.classList.add(ROW_HIGHLIGHT_CLASS_MAIN);
           highlightTarget.style.backgroundColor = ROW_HIGHLIGHT_COLOR;
           highlightTarget.style.transition = 'background-color 0.5s ease-out';
-          console.log(`[自動播放][主頁高亮] 已高亮項目 ${linkInfo.originalIndex + 1} 對應的元素`);
+          currentPausedHighlightElement = highlightTarget; // 設置新的暫停目標
 
-          // ** 新增：設置當前暫停高亮目標 **
-          currentPausedHighlightElement = highlightTarget;
-
-          const currentHighlightTarget = highlightTarget; // 捕獲當前高亮目標引用
+          // 設置延遲移除常規高亮
+          const currentHighlightTarget = highlightTarget;
           rowHighlightTimeout = setTimeout(() => {
-            if (currentHighlightTarget && currentHighlightTarget.classList.contains(ROW_HIGHLIGHT_CLASS_MAIN)) { // 確保元素仍然存在且有高亮
+            if (currentHighlightTarget && currentHighlightTarget.classList.contains(ROW_HIGHLIGHT_CLASS_MAIN)) {
               currentHighlightTarget.style.backgroundColor = '';
-              // 等待背景色過渡完成後移除 class
-              setTimeout(() => {
-                if (currentHighlightTarget) {
-                  currentHighlightTarget.classList.remove(ROW_HIGHLIGHT_CLASS_MAIN);
-                }
-              }, 500); // 匹配過渡時間
+              setTimeout(() => { if (currentHighlightTarget) currentHighlightTarget.classList.remove(ROW_HIGHLIGHT_CLASS_MAIN); }, 500);
             }
             rowHighlightTimeout = null;
           }, ROW_HIGHLIGHT_DURATION);
-        } else {
-          console.warn(`[自動播放][主頁高亮] 未能確定項目 ${linkInfo.originalIndex + 1} 的高亮目標 (tr)。`);
-          // currentPausedHighlightElement 已在上面清除
-        }
-      } else {
-        console.warn(`[自動播放][主頁捲動] 未能找到項目 ${linkInfo.originalIndex + 1} (URL: ${linkInfo.url}) 對應的元素進行捲動和高亮。`);
-        // currentPausedHighlightElement 已在上面清除
-      }
-      // --- 捲動高亮邏輯結束 ---
+        } else { console.warn(`[自動播放][主頁高亮] 未能確定項目 ${linkInfo.originalIndex + 1} 的高亮目標 (tr)。`); }
+      } else { console.warn(`[自動播放][主頁捲動] 未能找到項目 ${linkInfo.originalIndex + 1} (URL: ${linkInfo.url}) 對應的元素進行捲動和高亮。`); }
 
-      await sleep(200); // 等待滾動和高亮穩定
-      if (!isProcessing || isPaused) { // 如果在等待時狀態改變
-        continue; // 重新進入外層 while 檢查 isPaused
-      }
+      await sleep(200);
+      if (!isProcessing || isPaused) continue;
 
-      // ** 調用 processSingleLink **
+      // 處理單個連結
       await processSingleLink(linkInfo.url, currentLinkIndex);
-      if (!isProcessing) { // 檢查處理後是否被停止
-        break;
-      }
+      if (!isProcessing) break;
 
-      // ** 處理完一個連結後的 Modal 關閉邏輯 **
-      // 只有在非暫停狀態下才關閉 Modal
-      if (!isPaused) {
-        console.log(`[自動播放][偵錯] 連結 ${currentLinkIndex + 1} 處理完畢，非暫停狀態，關閉 Modal`);
-        closeModal(); // 確保關閉當前 Modal
-      } else {
-        console.log(`[自動播放][偵錯] 連結 ${currentLinkIndex + 1} 處理完畢，但處於暫停狀態，保持 Modal 開啟`);
-      }
+      // 關閉 Modal (如果沒有暫停)
+      if (!isPaused) closeModal();
 
-      // 只有在沒有暫停的情況下才移動到下一個連結
-      if (!isPaused) {
-        console.log(`[自動播放][偵錯] 索引增加`);
-        currentLinkIndex++;
-      } else {
-        console.log(`[自動播放][偵錯] 處於暫停狀態，索引保持不變`);
-        // isPaused 仍然為 true，外層 while 循環會在下一次迭代時繼續等待
-      }
+      // 移動到下一個連結 (如果沒有暫停)
+      if (!isPaused) currentLinkIndex++;
+      else console.log(`[自動播放][偵錯] 處於暫停狀態，索引保持不變`);
 
-      // 連結間的等待 (只有在非暫停且還有連結時執行)
+      // 連結間的等待
       if (currentLinkIndex < totalLinks && isProcessing && !isPaused) {
-        console.log(`[自動播放] 等待 ${DELAY_BETWEEN_IFRAMES_MS}ms 後處理下一個連結`);
-        try {
-          const sleepController = interruptibleSleep(DELAY_BETWEEN_IFRAMES_MS);
-          await sleepController.promise;
-        } catch (error) {
-          if (error.isCancellation) {
-            console.log(`[自動播放] 連結間等待被 '${error.reason}' 中斷。`);
-          } else {
-            throw error; // 重新拋出其他錯誤
-          }
-        } finally {
-          currentSleepController = null;
-        }
+        try { await interruptibleSleep(DELAY_BETWEEN_IFRAMES_MS).promise; } catch (error) { if (error.isCancellation) console.log(`[自動播放] 連結間等待被 '${error.reason}' 中斷。`); else throw error; } finally { currentSleepController = null; }
       }
-      if (!isProcessing) { // 再次檢查狀態
-        break;
-      }
+      if (!isProcessing) break;
     } // --- while loop end ---
 
     console.log(`[自動播放][偵錯] processLinksSequentially 循環結束。 isProcessing: ${isProcessing}, isPaused: ${isPaused}`);
-    // ** 修改：清除所有高亮和目標 **
-    if (rowHighlightTimeout) { clearTimeout(rowHighlightTimeout); }
-    document.querySelectorAll(`.${ROW_HIGHLIGHT_CLASS_MAIN}, .${ROW_PAUSED_HIGHLIGHT_CLASS}`).forEach(el => {
-      el.classList.remove(ROW_HIGHLIGHT_CLASS_MAIN, ROW_PAUSED_HIGHLIGHT_CLASS);
-      el.style.backgroundColor = '';
-      el.style.transition = '';
-      el.style.animation = '';
-    });
-    currentPausedHighlightElement = null;
-
-    // --- **自動分頁邏輯** ---
-    if (isProcessing && !isPaused) { // 只有在正常處理完畢時才嘗試翻頁
-      console.log("[自動播放] 當前頁面處理完畢，檢查是否有下一頁...");
+    if (isProcessing && !isPaused) { // 只有正常完成才檢查分頁
+      // --- 自動分頁邏輯 ---
+      let foundNextPage = false;
       const paginationNav = document.querySelector('nav[aria-label="頁碼"] ul.pagination');
       if (paginationNav) {
         const nextPageLink = paginationNav.querySelector('li:last-child > a');
-        // ** 修改：包含 "下一頁" (來自使用者更新) **
         if (nextPageLink && (nextPageLink.textContent.includes('後一頁') || nextPageLink.textContent.includes('下一頁')) && !nextPageLink.closest('li.disabled')) {
           const nextPageHref = nextPageLink.getAttribute('href');
           if (nextPageHref && nextPageHref !== '#') {
-            console.log(`[自動播放] 找到下一頁原始 href: ${nextPageHref}`);
             try {
               const currentParams = new URLSearchParams(window.location.search);
               const nextPageUrlTemp = new URL(nextPageHref, window.location.origin);
               const nextPageParams = nextPageUrlTemp.searchParams;
               const finalParams = new URLSearchParams(currentParams.toString());
-              PAGINATION_PARAMS.forEach(param => {
-                if (nextPageParams.has(param)) {
-                  finalParams.set(param, nextPageParams.get(param));
-                  console.log(`[自動播放][分頁] 更新參數 ${param}=${nextPageParams.get(param)}`);
-                }
-              });
+              PAGINATION_PARAMS.forEach(param => { if (nextPageParams.has(param)) finalParams.set(param, nextPageParams.get(param)); });
               finalParams.set(AUTOPLAY_PARAM, 'true');
               const finalNextPageUrl = `${window.location.pathname}?${finalParams.toString()}`;
-
               console.log(`[自動播放] 組合完成，準備跳轉至: ${finalNextPageUrl}`);
-              await sleep(1000);
-              window.location.href = finalNextPageUrl;
-              return; // 跳轉後結束
-            } catch (e) {
-              console.error("[自動播放] 處理下一頁 URL 時出錯:", e);
-            }
-          } else {
-            console.log("[自動播放] 「後一頁」/「下一頁」連結無效或被禁用。");
+              foundNextPage = true;
+              await sleep(1000); window.location.href = finalNextPageUrl;
+            } catch (e) { console.error("[自動播放] 處理下一頁 URL 時出錯:", e); }
           }
-        } else {
-          console.log("[自動播放] 未找到有效的「後一頁」或「下一頁」連結。");
         }
-      } else {
-        console.log("[自動播放] 未找到分頁導航元素。");
       }
-      // 無下一頁或處理出錯，執行正常完成邏輯
-      console.log("[自動播放] 所有連結處理完畢 (無下一頁)。");
-      alert("所有連結攏處理完畢！");
-      resetTriggerButton();
-    } else if (!isProcessing) { // 如果是被停止的
-      console.log("[自動播放] 處理流程被停止。");
-      resetTriggerButton();
-    } else { // 如果是暫停狀態結束
-      console.log("[自動播放] 流程結束於暫停狀態。");
-      // 維持 UI，等待使用者操作
-    }
+      if (!foundNextPage) { alert("所有連結攏處理完畢！"); resetTriggerButton(); }
+    } else { resetTriggerButton(); } // 停止或暫停結束時重置
   }
 
   // --- 控制按鈕事件處理 ---
 
-  // ** 輔助函數，獲取當前可見的表格元素列表 **
+  // 輔助函數，獲取當前可見的表格元素列表
   function getVisibleTables() {
     const allTables = document.querySelectorAll(ALL_TABLES_SELECTOR);
-    const visibleTables = Array.from(allTables).filter(table => {
-      try {
-        const style = window.getComputedStyle(table);
-        return style.display !== 'none' && style.visibility !== 'hidden';
-      } catch (e) {
-        console.error("[自動播放] 檢查表格可見性時出錯:", e, table);
-        return false;
-      }
+    return Array.from(allTables).filter(table => {
+      try { const style = window.getComputedStyle(table); return style.display !== 'none' && style.visibility !== 'hidden'; }
+      catch (e) { console.error("[自動播放] 檢查表格可見性時出錯:", e, table); return false; }
     });
-    return visibleTables;
   }
 
   // startPlayback
   function startPlayback(startIndex = 0) {
     console.log(`[自動播放] startPlayback 調用。 startIndex: ${startIndex}, isProcessing: ${isProcessing}, isPaused: ${isPaused}`);
-    if (!isProcessing) {
-      // (省略查找連結的程式碼 - 保持不變)
-      // ...
-      const linkSelector = getLinkSelector();
-      const visibleTables = getVisibleTables();
-      if (visibleTables.length === 0) {
-        alert("頁面上揣無目前顯示的結果表格！(已恢復完整選擇器)");
-        return;
-      }
-      const allLinks = [];
-      let globalRowIndex = 0;
-      visibleTables.forEach(table => {
-        const isWideTable = table.matches(WIDE_TABLE_SELECTOR);
-        const isNarrowTable = table.matches(NARROW_TABLE_SELECTOR);
-        if (isWideTable) {
-          const rows = table.querySelectorAll('tbody tr');
-          rows.forEach(row => {
-            const firstTd = row.querySelector('td:first-of-type');
-            if (firstTd && firstTd.querySelector('span.fw-normal')) {
-              const linkElement = row.querySelector(linkSelector);
-              if (linkElement) {
-                try {
-                  allLinks.push({ url: new URL(linkElement.getAttribute('href'), window.location.origin).href, anchorElement: linkElement, originalIndex: globalRowIndex });
-                  globalRowIndex++;
-                } catch (e) { console.error(`[自動播放][連結][寬] 處理連結 URL 時出錯:`, e, linkElement); }
-              }
-            }
-          });
-        } else if (isNarrowTable) {
-          const rows = table.querySelectorAll('tbody tr');
-          if (rows.length >= 2) {
-            const firstRowTd = rows[0].querySelector('td:first-of-type');
-            if (firstRowTd && firstRowTd.querySelector('span.fw-normal')) {
-              const secondRowTd = rows[1].querySelector('td:first-of-type');
-              if (secondRowTd) {
-                const linkElement = secondRowTd.querySelector(linkSelector);
-                if (linkElement) {
-                  try {
-                    allLinks.push({ url: new URL(linkElement.getAttribute('href'), window.location.origin).href, anchorElement: linkElement, originalIndex: globalRowIndex });
-                    globalRowIndex++;
-                  } catch (e) { console.error(`[自動播放][連結][窄] 處理連結 URL 時出錯:`, e, linkElement); }
-                }
-              }
-            }
-          }
-        } else { console.warn("[自動播放][連結] 發現未知類型的可見表格:", table); }
-      });
-      if (allLinks.length === 0) {
-        alert("目前顯示的表格內底揣無詞目連結 (已區分表格結構，已恢復完整選擇器)！");
-        return;
-      }
-      console.log(`[自動播放] 從 ${visibleTables.length} 個可見表格中根據結構找到 ${allLinks.length} 個連結。`);
-      if (startIndex >= allLinks.length) {
-        console.error(`[自動播放] 指定的開始索引 ${startIndex} 超出範圍 (${allLinks.length} 個連結)。`);
-        return;
-      }
-      // ... (省略查找連結的程式碼 - 結束)
+    if (isProcessing && !isPaused) { console.warn("[自動播放][偵錯] 開始/繼續 按鈕被點擊，但 isProcessing 為 true 且 isPaused 為 false，不執行任何操作。"); return; }
 
-      linksToProcess = allLinks.slice(startIndex);
-      totalLinks = linksToProcess.length;
-      currentLinkIndex = 0;
-      isProcessing = true;
-      isPaused = false;
-      console.log(`[自動播放] 開始新的播放流程，從全局索引 ${startIndex} 開始，共 ${totalLinks} 項。`);
-      startButton.style.display = 'none';
-      pauseButton.style.display = 'inline-block';
-      pauseButton.textContent = '暫停';
-      stopButton.style.display = 'inline-block';
-      statusDisplay.style.display = 'inline-block';
-      updateStatusDisplay();
-      processLinksSequentially();
-    } else if (isPaused) {
-      // ** 修改：從暫停狀態恢復 **
-      isPaused = false;
-      pauseButton.textContent = '暫停';
-      // ** 移除暫停閃爍效果 **
-      if (currentPausedHighlightElement) {
-        currentPausedHighlightElement.classList.remove(ROW_PAUSED_HIGHLIGHT_CLASS);
-        currentPausedHighlightElement.style.animation = ''; // 確保移除動畫樣式
-        // currentPausedHighlightElement = null; // 不在這裡清除，processLinksSequentially 會處理
-      }
-      updateStatusDisplay();
-      console.log("[自動播放] 從暫停狀態繼續。");
-      // 不需要重新調用 processLinksSequentially，它會在循環中自動繼續
-    } else {
-      console.warn("[自動播放][偵錯] 開始/繼續 按鈕被點擊，但 isProcessing 為 true 且 isPaused 為 false，不執行任何操作。");
+    if (isProcessing && isPaused) { // 從暫停恢復
+      isPaused = false; pauseButton.textContent = '暫停';
+      // 移除暫停閃爍
+      if (currentPausedHighlightElement) { currentPausedHighlightElement.classList.remove(ROW_PAUSED_HIGHLIGHT_CLASS); currentPausedHighlightElement.style.animation = ''; }
+      updateStatusDisplay(); console.log("[自動播放] 從暫停狀態繼續。"); return;
     }
+
+    // --- 首次啟動或從停止後重新啟動 ---
+    const linkSelector = getLinkSelector(); const visibleTables = getVisibleTables(); if (visibleTables.length === 0) { alert("頁面上揣無目前顯示的結果表格！"); return; }
+    const allLinks = []; let globalRowIndex = 0;
+    visibleTables.forEach(table => {
+      const isWideTable = table.matches(WIDE_TABLE_SELECTOR), isNarrowTable = table.matches(NARROW_TABLE_SELECTOR); const rows = table.querySelectorAll('tbody tr');
+      if (isWideTable) { rows.forEach(row => { const firstTd = row.querySelector('td:first-of-type'); if (firstTd && firstTd.querySelector(RELEVANT_ROW_MARKER_SELECTOR)) { const linkElement = row.querySelector(linkSelector); if (linkElement) { try { allLinks.push({ url: new URL(linkElement.getAttribute('href'), window.location.origin).href, anchorElement: linkElement, originalIndex: globalRowIndex }); globalRowIndex++; } catch (e) { console.error(`[自動播放][連結][寬] 處理連結 URL 時出錯:`, e, linkElement); } } } }); }
+      else if (isNarrowTable && rows.length >= 2) { const firstRowTd = rows[0].querySelector('td:first-of-type'), secondRowTd = rows[1].querySelector('td:first-of-type'); if (firstRowTd && firstRowTd.querySelector(RELEVANT_ROW_MARKER_SELECTOR) && secondRowTd) { const linkElement = secondRowTd.querySelector(linkSelector); if (linkElement) { try { allLinks.push({ url: new URL(linkElement.getAttribute('href'), window.location.origin).href, anchorElement: linkElement, originalIndex: globalRowIndex }); globalRowIndex++; } catch (e) { console.error(`[自動播放][連結][窄] 處理連結 URL 時出錯:`, e, linkElement); } } } }
+      else { console.warn("[自動播放][連結] 發現未知類型的可見表格:", table); }
+    });
+    if (allLinks.length === 0) { alert("目前顯示的表格內底揣無詞目連結！"); return; }
+    console.log(`[自動播放] 從 ${visibleTables.length} 個可見表格中找到 ${allLinks.length} 個連結。`);
+    if (startIndex >= allLinks.length) { console.error(`[自動播放] 指定的開始索引 ${startIndex} 超出範圍 (${allLinks.length} 個連結)。`); return; }
+
+    // 初始化狀態
+    linksToProcess = allLinks.slice(startIndex); totalLinks = linksToProcess.length; currentLinkIndex = 0; isProcessing = true; isPaused = false;
+    console.log(`[自動播放] 開始新的播放流程，從全局索引 ${startIndex} 開始，共 ${totalLinks} 項。`);
+
+    // 更新 UI
+    startButton.style.display = 'none'; pauseButton.style.display = 'inline-block'; pauseButton.textContent = '暫停'; stopButton.style.display = 'inline-block'; statusDisplay.style.display = 'inline-block';
+    updateStatusDisplay();
+
+    // 開始處理流程
+    processLinksSequentially();
   }
+
   // pausePlayback
   function pausePlayback() {
     console.log(`[自動播放] 暫停/繼續 按鈕點擊。 isProcessing: ${isProcessing}, isPaused: ${isPaused}`);
-    if (isProcessing) {
-      if (!isPaused) {
-        // --- 執行暫停 ---
-        isPaused = true;
-        pauseButton.textContent = '繼續';
-        updateStatusDisplay();
-        console.log("[自動播放] 執行暫停。");
-        if (currentSleepController) {
-          currentSleepController.cancel('paused');
-        }
-        // ** 新增：添加暫停閃爍效果 (如果透過按鈕暫停) **
-        // 注意：這裡與 overlay 點擊不同，modal 可能還開著
-        if (currentPausedHighlightElement) {
-          console.log("[自動播放] 為暫停目標添加閃爍效果 (按鈕觸發):", currentPausedHighlightElement);
-          currentPausedHighlightElement.classList.add(ROW_PAUSED_HIGHLIGHT_CLASS);
-        } else {
-          console.warn("[自動播放] 按鈕暫停，但找不到當前高亮目標元素。");
-        }
-      } else {
-        // --- 從暫停狀態恢復 ---
-        // 直接調用 startPlayback 處理恢復邏輯 (包含移除閃爍效果)
-        startPlayback();
-      }
-    } else {
-      console.warn("[自動播放][偵錯] 暫停 按鈕被點擊，但 isProcessing 為 false，不執行任何操作。");
-    }
+    if (!isProcessing) return;
+
+    if (!isPaused) { // 執行暫停
+      isPaused = true; pauseButton.textContent = '繼續'; updateStatusDisplay(); console.log("[自動播放] 執行暫停。");
+      if (currentSleepController) currentSleepController.cancel('paused');
+      // 添加暫停閃爍
+      if (currentPausedHighlightElement) currentPausedHighlightElement.classList.add(ROW_PAUSED_HIGHLIGHT_CLASS);
+      else console.warn("[自動播放] 按鈕暫停，但找不到當前高亮目標元素。");
+    } else { startPlayback(); } // 從暫停恢復
   }
+
   // stopPlayback
   function stopPlayback() {
     console.log(`[自動播放] 停止 按鈕點擊。 isProcessing: ${isProcessing}, isPaused: ${isPaused}`);
-    if (!isProcessing && !isPaused) {
-      console.log("[自動播放][偵錯] 停止按鈕點擊，但腳本已停止，不執行操作。");
-      return;
-    }
-    isProcessing = false;
-    isPaused = false; // 確保設定為非暫停
-    if (currentSleepController) {
-      currentSleepController.cancel('stopped');
-    }
-    console.log(`[自動播放][偵錯][停止前] currentIframe: ${currentIframe ? currentIframe.id : 'null'}, overlayElement: ${overlayElement ? 'exists' : 'null'}`);
-    closeModal(); // 確保關閉 Modal
-    resetTriggerButton(); // ** resetTriggerButton 會處理高亮移除 **
-    updateStatusDisplay();
+    if (!isProcessing && !isPaused) return;
+    isProcessing = false; isPaused = false;
+    if (currentSleepController) currentSleepController.cancel('stopped');
+    closeModal(); resetTriggerButton(); updateStatusDisplay();
   }
+
   // updateStatusDisplay
   function updateStatusDisplay() {
     if (statusDisplay) {
       if (isProcessing && linksToProcess.length > 0 && linksToProcess[currentLinkIndex]) {
-        const globalCurrentIndex = linksToProcess[currentLinkIndex].originalIndex;
         const currentBatchProgress = `(${currentLinkIndex + 1}/${totalLinks})`;
-        if (!isPaused) {
-          statusDisplay.textContent = `處理中 ${currentBatchProgress}`;
-        } else {
-          statusDisplay.textContent = `已暫停 ${currentBatchProgress}`;
-        }
-      } else {
-        statusDisplay.textContent = '';
-      }
+        statusDisplay.textContent = !isPaused ? `處理中 ${currentBatchProgress}` : `已暫停 ${currentBatchProgress}`;
+      } else { statusDisplay.textContent = ''; }
     }
   }
+
   // resetTriggerButton
   function resetTriggerButton() {
     console.log("[自動播放] 重置按鈕狀態。");
-    isProcessing = false;
-    isPaused = false;
-    currentLinkIndex = 0;
-    totalLinks = 0;
-    linksToProcess = [];
+    isProcessing = false; isPaused = false; currentLinkIndex = 0; totalLinks = 0; linksToProcess = [];
     if (startButton && pauseButton && stopButton && statusDisplay) {
-      startButton.disabled = false;
-      startButton.style.display = 'inline-block';
-      pauseButton.style.display = 'none';
-      pauseButton.textContent = '暫停';
-      stopButton.style.display = 'none';
-      statusDisplay.style.display = 'none';
-      statusDisplay.textContent = '';
+      startButton.disabled = false; startButton.style.display = 'inline-block';
+      pauseButton.style.display = 'none'; pauseButton.textContent = '暫停';
+      stopButton.style.display = 'none'; statusDisplay.style.display = 'none'; statusDisplay.textContent = '';
     }
-    // ** 修改：清除所有高亮和目標 **
     if (rowHighlightTimeout) clearTimeout(rowHighlightTimeout);
+    // 清除所有高亮
     document.querySelectorAll(`.${ROW_HIGHLIGHT_CLASS_MAIN}, .${ROW_PAUSED_HIGHLIGHT_CLASS}`).forEach(el => {
       el.classList.remove(ROW_HIGHLIGHT_CLASS_MAIN, ROW_PAUSED_HIGHLIGHT_CLASS);
-      el.style.backgroundColor = '';
-      el.style.transition = '';
-      el.style.animation = '';
+      el.style.backgroundColor = ''; el.style.transition = ''; el.style.animation = '';
     });
     currentPausedHighlightElement = null;
-    closeModal(); // 確保關閉 Modal
+    closeModal();
   }
+
   // 表格列播放按鈕點擊處理
   async function handleRowPlayButtonClick(event) {
     const button = event.currentTarget;
     const rowIndex = parseInt(button.dataset.rowIndex, 10);
-    console.log(`[自動播放] 表格列播放按鈕點擊，全局列索引 (可見且相關): ${rowIndex}`);
-    if (isNaN(rowIndex)) {
-      console.error("[自動播放] 無法獲取有效的列索引。");
-      return;
-    }
-    if (isProcessing && !isPaused) {
-      console.log("[自動播放] 目前正在播放中，請先停止或等待完成才能從指定列開始。");
-      alert("目前正在播放中，請先停止或等待完成才能從指定列開始。");
-      return;
-    }
-    if (isProcessing && isPaused) {
-      console.log("[自動播放] 偵測到處於暫停狀態，先停止當前流程...");
-      stopPlayback(); // stopPlayback 會調用 resetTriggerButton 清除高亮
-      await sleep(100); // 等待停止完成
-    }
+    if (isNaN(rowIndex)) { console.error("[自動播放] 無法獲取有效的列索引。"); return; }
+    if (isProcessing && !isPaused) { alert("目前正在播放中，請先停止或等待完成才能從指定列開始。"); return; }
+    if (isProcessing && isPaused) { console.log("[自動播放] 偵測到處於暫停狀態，先停止當前流程..."); stopPlayback(); await sleep(100); }
     startPlayback(rowIndex);
   }
+
   // 確保 Font Awesome 加載
   function ensureFontAwesome() {
-    const faLinkId = 'userscript-fontawesome-css';
-    if (!document.getElementById(faLinkId)) {
+    if (!document.getElementById('userscript-fontawesome-css')) {
       const link = document.createElement('link');
-      link.id = faLinkId;
-      link.rel = 'stylesheet';
-      link.href = FONT_AWESOME_URL;
-      link.integrity = FONT_AWESOME_INTEGRITY;
-      link.crossOrigin = 'anonymous';
-      link.referrerPolicy = 'no-referrer';
+      link.id = 'userscript-fontawesome-css'; link.rel = 'stylesheet'; link.href = FONT_AWESOME_URL; link.integrity = FONT_AWESOME_INTEGRITY; link.crossOrigin = 'anonymous'; link.referrerPolicy = 'no-referrer';
       document.head.appendChild(link);
       console.log('[自動播放] Font Awesome CSS 已注入。');
     }
   }
 
-  // ** 輔助函數：注入或更新單個按鈕 **
+  // 輔助函數：注入或更新單個按鈕
   function injectOrUpdateButton(targetRow, targetTd, rowIndex) {
     const buttonClass = 'userscript-row-play-button';
     let button = targetRow.querySelector(`.${buttonClass}`);
-    if (!targetTd) {
-      console.error(`[自動播放][按鈕注入] 錯誤：目標 td (行 ${rowIndex + 1}) 無效！`, targetRow);
-      return;
-    }
-    if (button) {
-      if (button.dataset.rowIndex !== String(rowIndex)) {
-        button.dataset.rowIndex = rowIndex;
-        button.title = `從此列開始播放 (第 ${rowIndex + 1} 項)`;
-      }
-      if (button.parentElement !== targetTd) {
-        console.warn(`[自動播放][按鈕注入] 按鈕 (行 ${rowIndex + 1}) 不在目標 td 內，正在移動...`);
-        targetTd.insertBefore(button, targetTd.querySelector('span.fw-normal')?.nextSibling || targetTd.firstChild);
-      }
-    } else {
+    if (!targetTd) { console.error(`[自動播放][按鈕注入] 錯誤：目標 td (行 ${rowIndex + 1}) 無效！`, targetRow); return; }
+    if (button) { // 更新現有
+      if (button.dataset.rowIndex !== String(rowIndex)) { button.dataset.rowIndex = rowIndex; button.title = `從此列開始播放 (第 ${rowIndex + 1} 項)`; }
+      if (button.parentElement !== targetTd) { targetTd.insertBefore(button, targetTd.querySelector('span.fw-normal')?.nextSibling || targetTd.firstChild); }
+    } else { // 添加新的
       const playButtonBaseStyle = ` background-color: #28a745; color: white; border: none; border-radius: 4px; padding: 2px 6px; margin: 0 8px; cursor: pointer; font-size: 12px; line-height: 1; vertical-align: middle; transition: background-color 0.2s ease; `;
-      button = document.createElement('button');
-      button.className = buttonClass;
-      button.style.cssText = playButtonBaseStyle;
-      button.innerHTML = '<i class="fas fa-play"></i>';
-      button.dataset.rowIndex = rowIndex;
-      button.title = `從此列開始播放 (第 ${rowIndex + 1} 項)`;
-      button.addEventListener('click', handleRowPlayButtonClick);
+      button = document.createElement('button'); button.className = buttonClass; button.style.cssText = playButtonBaseStyle; button.innerHTML = '<i class="fas fa-play"></i>'; button.dataset.rowIndex = rowIndex; button.title = `從此列開始播放 (第 ${rowIndex + 1} 項)`; button.addEventListener('click', handleRowPlayButtonClick);
       const numberSpan = targetTd.querySelector('span.fw-normal');
-      if (numberSpan && numberSpan.nextSibling) {
-        targetTd.insertBefore(button, numberSpan.nextSibling);
-      } else if (numberSpan) {
-        targetTd.appendChild(button);
-      } else {
-        targetTd.insertBefore(button, targetTd.firstChild);
-      }
+      if (numberSpan && numberSpan.nextSibling) { targetTd.insertBefore(button, numberSpan.nextSibling); }
+      else if (numberSpan) { targetTd.appendChild(button); }
+      else { targetTd.insertBefore(button, targetTd.firstChild); }
     }
   }
 
-  // ** 輔助函數：從行中移除按鈕 **
+  // 輔助函數：從行中移除按鈕 (目前未使用，但保留)
   function removeButtonFromRow(row) {
     const button = row.querySelector('.userscript-row-play-button');
-    if (button) {
-      button.remove();
-    }
+    if (button) button.remove();
   }
-
 
   // 注入表格列播放按鈕
   function injectRowPlayButtons() {
-    const visibleTables = getVisibleTables();
-    if (visibleTables.length === 0) {
-      console.log("[自動播放][injectRowPlayButtons] 未找到任何當前可見的結果表格，無法注入列播放按鈕。");
-      return;
-    }
-    const playButtonHoverStyle = `.userscript-row-play-button:hover { background-color: #218838 !important; }`;
-    GM_addStyle(playButtonHoverStyle);
-
-    const buttonClass = 'userscript-row-play-button';
-    const containerSelectors = TABLE_CONTAINER_SELECTOR.split(',').map(s => s.trim());
-    const removeSelectorParts = containerSelectors.map(sel => `${sel} > table .${buttonClass}`);
-    const removeSelector = removeSelectorParts.join(', ');
-
-    console.log(`[自動播放][injectRowPlayButtons] 準備移除舊按鈕，使用修正後的選擇器: "${removeSelector}"`);
-    const buttonsToRemove = document.querySelectorAll(removeSelector);
-    console.log(`[自動播放][injectRowPlayButtons] 找到 ${buttonsToRemove.length} 個待移除的舊按鈕。`);
-    buttonsToRemove.forEach(btn => btn.remove());
-    console.log(`[自動播放][injectRowPlayButtons] 已移除所有舊的行播放按鈕。`);
-
+    const visibleTables = getVisibleTables(); if (visibleTables.length === 0) { console.log("[自動播放][injectRowPlayButtons] 未找到任何當前可見的結果表格，無法注入列播放按鈕。"); return; }
+    const playButtonHoverStyle = `.userscript-row-play-button:hover { background-color: #218838 !important; }`; GM_addStyle(playButtonHoverStyle);
+    const buttonClass = 'userscript-row-play-button'; const containerSelectors = TABLE_CONTAINER_SELECTOR.split(',').map(s => s.trim()); const removeSelectorParts = containerSelectors.map(sel => `${sel} > table .${buttonClass}`); const removeSelector = removeSelectorParts.join(', '); console.log(`[自動播放][injectRowPlayButtons] 準備移除舊按鈕，使用修正後的選擇器: "${removeSelector}"`); const buttonsToRemove = document.querySelectorAll(removeSelector); buttonsToRemove.forEach(btn => btn.remove()); console.log(`[自動播放][injectRowPlayButtons] 已移除 ${buttonsToRemove.length} 個舊的行播放按鈕。`);
     let globalRowIndex = 0;
     visibleTables.forEach((table, tableIndex) => {
-      const isWideTable = table.matches(WIDE_TABLE_SELECTOR);
-      const isNarrowTable = table.matches(NARROW_TABLE_SELECTOR);
-      const rows = table.querySelectorAll('tbody tr');
-      const tableId = `可見表格 ${tableIndex + 1} (${isWideTable ? '寬' : isNarrowTable ? '窄' : '未知'})`;
-
-      if (isWideTable) {
-        rows.forEach((row, rowIndexInTable) => {
-          const firstTd = row.querySelector('td:first-of-type');
-          if (firstTd && firstTd.querySelector('span.fw-normal')) {
-            injectOrUpdateButton(row, firstTd, globalRowIndex);
-            globalRowIndex++;
-          }
-        });
-      } else if (isNarrowTable) {
-        if (rows.length >= 1) {
-          const firstRow = rows[0];
-          const firstRowTd = firstRow.querySelector('td:first-of-type');
-          const hasMarker = firstRowTd && firstRowTd.querySelector('span.fw-normal');
-          if (hasMarker) {
-            let isValidNarrowEntry = false;
-            if (rows.length >= 2) {
-              const secondRow = rows[1];
-              const secondRowTd = secondRow.querySelector('td:first-of-type');
-              if (secondRowTd) {
-                const linkElement = secondRowTd.querySelector(getLinkSelector());
-                if (linkElement) isValidNarrowEntry = true;
-              }
-            }
-            if (isValidNarrowEntry) {
-              injectOrUpdateButton(firstRow, firstRowTd, globalRowIndex);
-              globalRowIndex++;
-            }
-          }
-        }
-      } else {
-        console.warn(`[自動播放][按鈕注入] ${tableId} 類型未知，跳過按鈕注入。`);
-      }
+      const isWideTable = table.matches(WIDE_TABLE_SELECTOR), isNarrowTable = table.matches(NARROW_TABLE_SELECTOR); const rows = table.querySelectorAll('tbody tr');
+      if (isWideTable) { rows.forEach((row) => { const firstTd = row.querySelector('td:first-of-type'); if (firstTd && firstTd.querySelector(RELEVANT_ROW_MARKER_SELECTOR)) { injectOrUpdateButton(row, firstTd, globalRowIndex); globalRowIndex++; } }); }
+      else if (isNarrowTable && rows.length >= 1) { const firstRow = rows[0], firstRowTd = firstRow.querySelector('td:first-of-type'); const hasMarker = firstRowTd && firstRowTd.querySelector(RELEVANT_ROW_MARKER_SELECTOR); if (hasMarker) { let isValid = false; if (rows.length >= 2) { const secondRowTd = rows[1].querySelector('td:first-of-type'); if (secondRowTd && secondRowTd.querySelector(getLinkSelector())) isValid = true; } if (isValid) { injectOrUpdateButton(firstRow, firstRowTd, globalRowIndex); globalRowIndex++; } } }
+      else { console.warn(`[自動播放][按鈕注入] 表格 ${tableIndex + 1} 類型未知，跳過按鈕注入。`); }
     });
     console.log(`[自動播放][injectRowPlayButtons] 已處理 ${globalRowIndex} 個有效項目，注入或更新播放按鈕。`);
   }
@@ -1196,90 +711,108 @@
   // 添加觸發按鈕
   function addTriggerButton() {
     if (document.getElementById('auto-play-controls-container')) return;
-    const buttonContainer = document.createElement('div');
-    buttonContainer.id = 'auto-play-controls-container';
-    // ... (樣式設定省略)
-    buttonContainer.style.position = 'fixed';
-    buttonContainer.style.top = '10px';
-    buttonContainer.style.left = '10px';
-    buttonContainer.style.zIndex = '10001';
-    buttonContainer.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
-    buttonContainer.style.padding = '5px 10px';
-    buttonContainer.style.borderRadius = '5px';
-    buttonContainer.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
-    const buttonStyle = `padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; margin-right: 5px; transition: background-color 0.2s ease;`;
-
-    startButton = document.createElement('button');
-    startButton.id = 'auto-play-start-button';
-    startButton.textContent = '開始播放全部';
-    startButton.style.cssText = buttonStyle;
-    startButton.style.backgroundColor = '#28a745';
-    startButton.style.color = 'white';
-    startButton.addEventListener('click', () => startPlayback(0));
-    buttonContainer.appendChild(startButton);
-
-    pauseButton = document.createElement('button');
-    pauseButton.id = 'auto-play-pause-button';
-    pauseButton.textContent = '暫停';
-    pauseButton.style.cssText = buttonStyle;
-    pauseButton.style.backgroundColor = '#ffc107';
-    pauseButton.style.color = 'black';
-    pauseButton.style.display = 'none';
-    pauseButton.addEventListener('click', pausePlayback);
-    buttonContainer.appendChild(pauseButton);
-
-    stopButton = document.createElement('button');
-    stopButton.id = 'auto-play-stop-button';
-    stopButton.textContent = '停止';
-    stopButton.style.cssText = buttonStyle;
-    stopButton.style.backgroundColor = '#dc3545';
-    stopButton.style.color = 'white';
-    stopButton.style.display = 'none';
-    stopButton.addEventListener('click', stopPlayback);
-    buttonContainer.appendChild(stopButton);
-
-    statusDisplay = document.createElement('span');
-    statusDisplay.id = 'auto-play-status';
-    statusDisplay.style.display = 'none';
-    statusDisplay.style.marginLeft = '10px';
-    statusDisplay.style.fontSize = '14px';
-    statusDisplay.style.verticalAlign = 'middle';
-    buttonContainer.appendChild(statusDisplay);
-
+    const buttonContainer = document.createElement('div'); buttonContainer.id = 'auto-play-controls-container'; Object.assign(buttonContainer.style, { position: 'fixed', top: '10px', left: '10px', zIndex: '10001', backgroundColor: 'rgba(255, 255, 255, 0.8)', padding: '5px 10px', borderRadius: '5px', boxShadow: '0 2px 5px rgba(0,0,0,0.2)' }); const buttonStyle = `padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; margin-right: 5px; transition: background-color 0.2s ease;`;
+    startButton = document.createElement('button'); startButton.id = 'auto-play-start-button'; startButton.textContent = '開始播放全部'; Object.assign(startButton.style, { cssText: buttonStyle, backgroundColor: '#28a745', color: 'white' }); startButton.addEventListener('click', () => startPlayback(0)); buttonContainer.appendChild(startButton);
+    pauseButton = document.createElement('button'); pauseButton.id = 'auto-play-pause-button'; pauseButton.textContent = '暫停'; Object.assign(pauseButton.style, { cssText: buttonStyle, backgroundColor: '#ffc107', color: 'black', display: 'none' }); pauseButton.addEventListener('click', pausePlayback); buttonContainer.appendChild(pauseButton);
+    stopButton = document.createElement('button'); stopButton.id = 'auto-play-stop-button'; stopButton.textContent = '停止'; Object.assign(stopButton.style, { cssText: buttonStyle, backgroundColor: '#dc3545', color: 'white', display: 'none' }); stopButton.addEventListener('click', stopPlayback); buttonContainer.appendChild(stopButton);
+    statusDisplay = document.createElement('span'); statusDisplay.id = 'auto-play-status'; Object.assign(statusDisplay.style, { display: 'none', marginLeft: '10px', fontSize: '14px', verticalAlign: 'middle' }); buttonContainer.appendChild(statusDisplay);
     document.body.appendChild(buttonContainer);
     GM_addStyle(`#auto-play-controls-container button:disabled { opacity: 0.65; cursor: not-allowed; } #auto-play-start-button:hover:not(:disabled) { background-color: #218838 !important; } #auto-play-pause-button:hover:not(:disabled) { background-color: #e0a800 !important; } #auto-play-stop-button:hover:not(:disabled) { background-color: #c82333 !important; }`);
   }
 
   // 輔助函數，獲取當前應使用的連結選擇器
   function getLinkSelector() {
-    const currentUrl = window.location.href;
-    if (currentUrl.includes('/zh-hant/')) {
-      return 'a[href^="/zh-hant/su/"]';
-    } else {
-      return 'a[href^="/und-hani/su/"]';
-    }
+    return window.location.href.includes('/zh-hant/') ? 'a[href^="/zh-hant/su/"]' : 'a[href^="/und-hani/su/"]';
   }
+
+  // ** v4.21 修改：顯示行動裝置互動遮罩 (包含背景和提示框) **
+  function showMobileInteractionOverlay() {
+    // 防止重複添加
+    if (document.getElementById(MOBILE_INTERACTION_BOX_ID) || document.getElementById(MOBILE_BG_OVERLAY_ID)) {
+      console.warn("[自動播放] 行動裝置互動遮罩已存在，取消添加。");
+      return;
+    }
+
+    // 1. 創建背景遮罩
+    const bgOverlay = document.createElement('div');
+    bgOverlay.id = MOBILE_BG_OVERLAY_ID;
+    // 樣式由 CSS 控制 (z-index: 10004)
+    document.body.appendChild(bgOverlay);
+
+    // 2. 創建提示框
+    const interactionBox = document.createElement('div');
+    interactionBox.id = MOBILE_INTERACTION_BOX_ID;
+    interactionBox.textContent = '手機上請點擊後繼續播放'; // 提示文字
+    // --- 由 JS 設定樣式以使用常數 ---
+    interactionBox.style.position = 'fixed';
+    interactionBox.style.width = MODAL_WIDTH;
+    interactionBox.style.height = MODAL_HEIGHT;
+    interactionBox.style.top = '50%';
+    interactionBox.style.left = '50%';
+    interactionBox.style.transform = 'translate(-50%, -50%)';
+    // 其他樣式由 CSS 控制 (z-index: 10005)
+    document.body.appendChild(interactionBox);
+
+    // 3. 添加點擊事件 (點擊背景或提示框皆可)
+    const clickHandler = () => {
+      console.log("[自動播放] 行動裝置互動提示被點擊。");
+      // 移除兩個遮罩
+      const box = document.getElementById(MOBILE_INTERACTION_BOX_ID);
+      const bg = document.getElementById(MOBILE_BG_OVERLAY_ID);
+      if (box) box.remove();
+      if (bg) bg.remove();
+      // 啟動播放
+      initiateAutoPlayback();
+    };
+
+    interactionBox.addEventListener('click', clickHandler, { once: true });
+    bgOverlay.addEventListener('click', clickHandler, { once: true }); // 背景也加上一次性監聽
+
+    console.log("[自動播放] 已顯示行動裝置互動提示遮罩和提示框。");
+  }
+
+  // ** v4.21 新增：封裝自動播放啟動邏輯 **
+  function initiateAutoPlayback() {
+    console.log("[自動播放] 重新注入/更新行內播放按鈕以確保索引正確...");
+    injectRowPlayButtons();
+    // 短暫延遲後啟動，確保按鈕渲染完成
+    setTimeout(() => {
+      console.log("[自動播放] 自動啟動播放流程...");
+      startPlayback(0); // 從第一個連結開始
+    }, 300);
+  }
+
 
   // 初始化
   function initialize() {
-    if (window.autoPlayerInitialized) return;
+    if (window.autoPlayerInitialized) return; // 防止重複初始化
     window.autoPlayerInitialized = true;
-    console.log("[自動播放] 初始化腳本 v4.20 ..."); // 維持版本號
-    GM_addStyle(HIGHLIGHT_STYLE); // ** 注入包含閃爍效果的樣式 **
-    ensureFontAwesome();
+
+    // ** v4.21 偵測行動裝置 **
+    isMobile = navigator.userAgent.toLowerCase().includes('mobile');
+    console.log(`[自動播放] 初始化腳本 v4.21 ... isMobile: ${isMobile}`); // ** 維持 v4.21 **
+
+    // 注入樣式
+    GM_addStyle(HIGHLIGHT_STYLE); // ** v4.21 注入包含新樣式的 HIGHLIGHT_STYLE **
+    ensureFontAwesome(); // 確保圖標字體加載
+
+    // 添加控制按鈕
     addTriggerButton();
-    // 初始注入按鈕
+
+    // 初始注入行內播放按鈕 (延遲執行確保表格已渲染)
     setTimeout(injectRowPlayButtons, 1000);
 
-    // ** ResizeObserver 監聽 RWD 變化 **
+    // 使用 ResizeObserver 監聽 RWD 變化
     try {
       const resizeObserver = new ResizeObserver(entries => {
+        // 使用 debounce 避免短時間內重複觸發
         clearTimeout(resizeDebounceTimeout);
         resizeDebounceTimeout = setTimeout(() => {
           console.log("[自動播放][ResizeObserver] Debounced: 偵測到尺寸變化，重新注入按鈕並嘗試捲動...");
-          injectRowPlayButtons();
+          injectRowPlayButtons(); // 重新注入按鈕以適應新佈局
+          // 如果正在播放，嘗試捲動到當前項目
           const currentUrl = linksToProcess[currentLinkIndex]?.url;
-          if (currentUrl) {
+          if (currentUrl && isProcessing && !isPaused) { // 只在處理中且非暫停時捲動
             const elementToScroll = findElementForLink(currentUrl);
             if (elementToScroll) {
               console.log("[自動播放][ResizeObserver] 找到元素，執行捲動:", elementToScroll);
@@ -1288,30 +821,34 @@
               console.warn("[自動播放][ResizeObserver] 未找到元素進行捲動:", currentUrl);
             }
           } else {
-            console.log("[自動播放][ResizeObserver] 沒有當前連結 URL，不執行捲動。");
+            console.log("[自動播放][ResizeObserver] 沒有當前連結 URL 或不在處理中，不執行捲動。");
           }
         }, RESIZE_DEBOUNCE_MS);
       });
+      // 監聽 body 尺寸變化
       resizeObserver.observe(document.body);
       console.log("[自動播放] 已啟動 ResizeObserver 監聽 document.body 變化。");
     } catch (e) {
       console.error("[自動播放] 無法啟動 ResizeObserver:", e);
     }
 
-    // ** 自動啟動邏輯 **
+    // ** v4.21 修改：自動啟動邏輯 **
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.has(AUTOPLAY_PARAM)) {
       console.log(`[自動播放] 檢測到 URL 參數 "${AUTOPLAY_PARAM}"，準備自動啟動...`);
+      // 從 URL 中移除 autoplay 參數，避免刷新頁面時再次觸發
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.delete(AUTOPLAY_PARAM);
-      history.replaceState(null, '', newUrl.toString());
+      history.replaceState(null, '', newUrl.toString()); // 使用 replaceState 避免產生瀏覽歷史
 
+      // 等待表格內容加載完成後再啟動
       let elapsedTime = 0;
       const waitForTableAndStart = () => {
         console.log("[自動播放][等待] 檢查可見表格和有效連結是否存在...");
         const linkSelector = getLinkSelector();
         const visibleTables = getVisibleTables();
         let linksExist = false;
+        // 檢查是否有符合條件的連結存在
         visibleTables.forEach(table => {
           if (linksExist) return;
           const isWideTable = table.matches(WIDE_TABLE_SELECTOR);
@@ -1320,27 +857,27 @@
           if (isWideTable) {
             linksExist = Array.from(rows).some(row => {
               const firstTd = row.querySelector('td:first-of-type');
-              return firstTd && firstTd.querySelector('span.fw-normal') && row.querySelector(linkSelector);
+              return firstTd && firstTd.querySelector(RELEVANT_ROW_MARKER_SELECTOR) && row.querySelector(linkSelector);
             });
           } else if (isNarrowTable && rows.length >= 2) {
             const firstRowTd = rows[0].querySelector('td:first-of-type');
             const secondRowTd = rows[1].querySelector('td:first-of-type');
-            linksExist = firstRowTd && firstRowTd.querySelector('span.fw-normal') &&
+            linksExist = firstRowTd && firstRowTd.querySelector(RELEVANT_ROW_MARKER_SELECTOR) &&
               secondRowTd && secondRowTd.querySelector(linkSelector);
           }
         });
 
         if (linksExist) {
-          console.log("[自動播放][等待] 可見表格和有效連結已找到，延遲後啟動播放...");
-          setTimeout(() => {
-            console.log("[自動播放] 重新注入/更新行內播放按鈕以確保索引正確...");
-            injectRowPlayButtons();
-            setTimeout(() => {
-              console.log("[自動播放] 自動啟動播放流程...");
-              startPlayback(0);
-            }, 300);
-          }, 500);
-        } else {
+          console.log("[自動播放][等待] 可見表格和有效連結已找到。");
+          // 根據是否為行動裝置決定行為
+          if (isMobile) { // ** v4.21 判斷 **
+            console.log("[自動播放] 偵測為行動裝置，顯示互動提示。");
+            showMobileInteractionOverlay(); // 顯示遮罩，點擊後才會啟動播放
+          } else {
+            console.log("[自動播放] 偵測為非行動裝置，直接啟動播放。");
+            initiateAutoPlayback(); // 直接啟動播放
+          }
+        } else { // 如果還沒找到連結
           elapsedTime += AUTO_START_CHECK_INTERVAL_MS;
           if (elapsedTime >= AUTO_START_MAX_WAIT_MS) {
             console.error("[自動播放][等待] 等待可見表格和有效連結超時。自動播放失敗。");
@@ -1351,15 +888,17 @@
           }
         }
       };
+      // 稍作延遲後開始檢查，給頁面一點渲染時間
       setTimeout(waitForTableAndStart, 500);
     }
   }
 
   // --- 確保 DOM 加載完成後執行 ---
+  // 使用 document.readyState 檢查，比 DOMContentLoaded 更可靠
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    setTimeout(initialize, 0);
+    setTimeout(initialize, 0); // 如果已完成，非同步執行初始化
   } else {
-    document.addEventListener('DOMContentLoaded', initialize);
+    document.addEventListener('DOMContentLoaded', initialize); // 否則等待 DOMContentLoaded
   }
 
 })();
