@@ -105,7 +105,7 @@
         .${ROW_PAUSED_HIGHLIGHT_CLASS} {
             animation: userscriptPulseHighlight 1.5s ease-in-out infinite;
             /* ** 新增：確保暫停時背景色來自動畫 ** */
-            background-color: transparent !important;
+            /* background-color: transparent !important; */
         }
   `;
   const CSS_MOBILE_OVERLAY = `
