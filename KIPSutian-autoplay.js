@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.25
+// @version      4.25.1
 // @description  自動開啟查詢結果表格中每個詞目連結於 Modal iframe，依序播放音檔(自動偵測時長)，主表格自動滾動高亮，**處理完畢後自動跳轉下一頁繼續播放(修正URL與啟動時機)**，可即時暫停/停止/點擊背景暫停/點擊表格列播放，並根據亮暗模式高亮按鈕。 **v4.25: 控制按鈕容器改為播放後才出現，並再次審閱程式碼風格。**
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
@@ -52,7 +52,7 @@
   const PAGINATION_PARAMS = ['iahbe', 'pitsoo'];
   const AUTO_START_MAX_WAIT_MS = 10000;
   const AUTO_START_CHECK_INTERVAL_MS = 500;
-  const TABLE_CONTAINER_SELECTOR = 'main.container-fluid div.mt-1.mb-5, main.container-fluid div.mt-1.mb-4, main.container-fluid div.mb-5';
+  const TABLE_CONTAINER_SELECTOR = 'main.container-fluid div.mt-1.mb-5, main.container-fluid div.mt-1.mb-4, main.container-fluid div.mb-5, main.container-fluid div.mt-1';
   const ALL_TABLES_SELECTOR = TABLE_CONTAINER_SELECTOR.split(',')
     .map(s => `${s.trim()} > table`)
     .join(', ');
