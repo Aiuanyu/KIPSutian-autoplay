@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.30.4
+// @version      4.30.5
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。 v4.30.4: 調整程式碼排版以增加可讀性。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
@@ -10,7 +10,7 @@
 // @match        http*://sutian.moe.edu.tw/und-hani/poosiu/poosiu/*/*
 // @match        http*://sutian.moe.edu.tw/und-hani/tsongpitueh/*
 // @match        http*://sutian.moe.edu.tw/und-hani/huliok/*
-// @match        http*://sutian.moe.edu.tw/zh-hant/tshiau/* // ** 更新：涵蓋新的列表頁面 **
+// @match        http*://sutian.moe.edu.tw/zh-hant/tshiau/*
 // @match        http*://sutian.moe.edu.tw/zh-hant/hunlui/*
 // @match        http*://sutian.moe.edu.tw/zh-hant/siannuntiau/*
 // @match        http*://sutian.moe.edu.tw/zh-hant/poosiu/poosiu/*/*
