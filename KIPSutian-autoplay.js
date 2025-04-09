@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.36
-// @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近5筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)。 v4.35.0: 區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。
+// @version      4.37
+// @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近5筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
 // @match        http*://sutian.moe.edu.tw/und-hani/hunlui/*
@@ -1781,6 +1781,42 @@
   }
 
   /**
+   * 根據捲動位置更新控制按鈕容器的頂部位置
+   */
+  function updateControlsPosition() {
+    // 從您的常數定義中獲取 ID
+    const CONTROLS_CONTAINER_ID = 'auto-play-controls-container';
+    const controlsContainer = document.getElementById(CONTROLS_CONTAINER_ID);
+    const header = document.querySelector('header#header'); // 或者您用來獲取 header 的選擇器
+
+    // 如果容器還沒創建好，就先不做事
+    if (!controlsContainer) {
+      return;
+    }
+
+    let newTop = '10px'; // 預設值：捲動超過 header 或找不到 header 時
+
+    if (header) {
+      try {
+        const headerHeight = header.offsetHeight;
+        // 檢查捲動位置是否在 header 高度內
+        if (window.scrollY <= headerHeight) {
+          newTop = `${headerHeight + 10}px`; // 在 header 下方
+        }
+        // else: 維持預設值 '10px'
+      } catch (e) {
+        console.error('[自動播放][定位] 計算 Header 高度或捲動位置時出錯:', e);
+        // 出錯時也使用預設值
+      }
+    } else {
+      // console.warn('[自動播放][定位] Header 元素未找到，使用預設 top: 10px');
+    }
+
+    // 更新容器的 top 樣式
+    controlsContainer.style.top = newTop;
+  }
+
+  /**
    * **修改：確保控制按鈕容器存在，並添加下拉選單 (下拉選單持續顯示)**
    */
   function ensureControlsContainer() {
@@ -1820,6 +1856,7 @@
           boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
           backdropFilter: 'blur(10px)',
           textAlign: 'center',
+          transition: 'top 0.3s ease-in-out',
         });
       } catch (e) {
         console.error('[自動播放] 計算 fixed top 或設定樣式時發生錯誤:', e);
@@ -2186,6 +2223,13 @@
         saveCurrentProgress();
       }
     });
+
+    // 添加捲動事件監聽器，使用 passive: true 提升效能
+    window.addEventListener('scroll', updateControlsPosition, {
+      passive: true,
+    });
+    // 在添加監聽器後，延遲一點點時間呼叫一次，以設定初始位置
+    setTimeout(updateControlsPosition, 150); // 延遲 150 毫秒
   }
 
   // --- 確保 DOM 加載完成後執行 ---
