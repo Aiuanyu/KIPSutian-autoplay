@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.35
+// @version      4.36
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近5筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)。 v4.35.0: 區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
@@ -25,6 +25,8 @@
 // @connect      sutian.moe.edu.tw
 // @run-at       document-idle
 // @license      GNU GPLv3
+// @downloadURL https://update.greasyfork.org/scripts/531767/KIPSutian-autoplay.user.js
+// @updateURL https://update.greasyfork.org/scripts/531767/KIPSutian-autoplay.meta.js
 // ==/UserScript==
 
 (function () {
@@ -75,7 +77,7 @@
   const MOBILE_BOX_TEXT_COLOR_DARK = '#EEEEEE';
   const MOBILE_BG_OVERLAY_COLOR = 'rgba(0, 0, 0, 0.6)';
   const LOCAL_STORAGE_KEY = 'KIP_AUTOPLAY_PROGRESS'; // localStorage 鍵名
-  const MAX_PROGRESS_ENTRIES = 5; // 最大儲存筆數
+  const MAX_PROGRESS_ENTRIES = 10; // 最大儲存筆數
   const PROGRESS_DROPDOWN_ID = 'userscript-progress-dropdown'; // 下拉選單 ID
 
   // --- 適應亮暗模式的高亮樣式 ---
@@ -143,7 +145,7 @@
         }
         #${PROGRESS_DROPDOWN_ID} {
             /* ** 修改：調整 margin ** */
-            margin: 0 5px;
+            margin: 5px;
             padding: 4px 8px; font-size: 12px;
             vertical-align: middle; border-radius: 4px; border: 1px solid #ccc;
             background-color: white; color: black; cursor: pointer; width: 7em;
@@ -171,8 +173,10 @@
   let progressDropdown = null; // 下拉選單引用
 
   // --- UI 元素引用 ---
+  let breakBeforePauseButton = null;
   let pauseButton = null;
   let stopButton = null;
+  let breakBeforeStatusDisplay = null;
   let statusDisplay = null;
   let overlayElement = null;
 
@@ -1439,8 +1443,11 @@
     totalItems = 0;
     itemsToProcess = [];
 
+    if (breakBeforePauseButton) breakBeforePauseButton.style.display = 'none';
     if (pauseButton) pauseButton.style.display = 'none';
     if (stopButton) stopButton.style.display = 'none';
+    if (breakBeforeStatusDisplay)
+      breakBeforeStatusDisplay.style.display = 'none';
     if (statusDisplay) statusDisplay.style.display = 'none';
     if (progressDropdown) {
       progressDropdown.style.display = 'inline-block';
@@ -1741,7 +1748,7 @@
     statusDisplay.id = 'auto-play-status';
     Object.assign(statusDisplay.style, {
       display: 'none',
-      marginLeft: '10px',
+      // marginLeft: '10px',
       fontSize: '14px',
       verticalAlign: 'middle',
     });
@@ -1762,6 +1769,15 @@
         window.location.href = selectedUrl;
       }
     });
+
+    breakBeforePauseButton = document.createElement('br');
+    breakBeforeStatusDisplay = document.createElement('br');
+    Object.assign(breakBeforePauseButton.style, {
+      display: 'none',
+    });
+    Object.assign(breakBeforeStatusDisplay.style, {
+      display: 'none',
+    });
   }
 
   /**
@@ -1773,20 +1789,73 @@
       console.log('[自動播放] 創建控制按鈕容器...');
       buttonContainer = document.createElement('div');
       buttonContainer.id = CONTROLS_CONTAINER_ID;
-      Object.assign(buttonContainer.style, {
-        position: 'fixed',
-        top: '10px',
-        left: '10px',
-        zIndex: '10001',
-        backgroundColor: 'rgba(255, 255, 255, 0.8)',
-        padding: '5px 10px',
-        borderRadius: '5px',
-        boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
-      });
+
+      // --- 設定樣式 (動態加上 header height 作為 top) ---
+      try {
+        const headerElement = document.querySelector('header#header');
+        let fixedTopOffset = 10; // 預設值 (如果找不到 header)
+        let positionType = 'fixed'; // 預設值
+
+        if (headerElement) {
+          const headerHeight = headerElement.offsetHeight;
+          fixedTopOffset = headerHeight + 10;
+          positionType = 'fixed';
+          console.log(
+            `[自動播放] 設定 top: ${fixedTopOffset}px (Header height: ${headerHeight}px)`
+          );
+        } else {
+          console.warn(
+            '[自動播放] 找不到 Header 元素，無法計算位於 header 下的 fixed top，將使用角落定位。'
+          );
+        }
+
+        Object.assign(buttonContainer.style, {
+          position: positionType,
+          top: fixedTopOffset + 'px',
+          left: '10px',
+          zIndex: '10001',
+          backgroundColor: 'rgba(255, 255, 255, 0.8)',
+          padding: '5px 10px',
+          borderRadius: '5px',
+          boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+          backdropFilter: 'blur(10px)',
+          textAlign: 'center',
+        });
+      } catch (e) {
+        console.error('[自動播放] 計算 fixed top 或設定樣式時發生錯誤:', e);
+        // 出錯時的後備樣式
+        Object.assign(buttonContainer.style, {
+          position: 'fixed',
+          top: '10px',
+          left: '10px',
+          zIndex: '10001',
+          backgroundColor: 'rgba(255, 255, 255, 0.8)',
+          padding: '5px 10px',
+          borderRadius: '5px',
+          boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+          backdropFilter: 'blur(10px)',
+          textAlign: 'center',
+        });
+      }
+      // --- 設定樣式結束 ---
+
       if (progressDropdown) buttonContainer.appendChild(progressDropdown);
-      if (pauseButton) buttonContainer.appendChild(pauseButton);
+      if (pauseButton) {
+        buttonContainer.appendChild(pauseButton);
+        buttonContainer.insertBefore(breakBeforePauseButton, pauseButton);
+        Object.assign(breakBeforePauseButton.style, {
+          display: 'initial',
+        });
+      }
       if (stopButton) buttonContainer.appendChild(stopButton);
-      if (statusDisplay) buttonContainer.appendChild(statusDisplay);
+      if (statusDisplay) {
+        buttonContainer.appendChild(statusDisplay);
+        buttonContainer.insertBefore(breakBeforeStatusDisplay, statusDisplay);
+        Object.assign(breakBeforeStatusDisplay.style, {
+          display: 'initial',
+        });
+      }
+
       document.body.appendChild(buttonContainer);
       GM_addStyle(CSS_CONTROLS_BUTTONS);
       populateProgressDropdown();
