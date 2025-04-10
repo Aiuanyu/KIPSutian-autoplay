@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.38.1
+// @version      4.39
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
@@ -540,20 +540,41 @@
       console.error('[自動播放][表格頁] 無法在 iframe 中添加樣式:', e);
     }
   }
+
+  /**
+   * 處理遮罩點擊事件：
+   * - 播放中點擊：暫停並關閉 Modal (表格頁)
+   * - 暫停中點擊：僅關閉 Modal (表格頁)
+   */
   function handleOverlayClick(event) {
+    // 確保點擊的是遮罩本身，而不是 Modal 內部
     if (event.target !== overlayElement) {
       return;
     }
-    if (isProcessing && !isPaused) {
-      console.log('[自動播放][表格頁] 點擊背景遮罩，觸發暫停並關閉 Modal。');
-      pausePlayback(); // 呼叫 pausePlayback 來處理暫停狀態和儲存進度
 
-      // ** 在這裡加上判斷，如果是表格頁就關閉 Modal **
+    if (isProcessing && !isPaused) {
+      // --- 原本的邏輯：播放中點擊 ---
+      console.log(
+        '[自動播放][表格頁] 點擊背景遮罩 (播放中)，觸發暫停並關閉 Modal。'
+      );
+      pausePlayback(); // 設為暫停狀態
+
+      // 只有表格頁需要關閉 Modal
       if (!isListPage) {
-        closeModal(); // 把這行加回來！
+        closeModal();
+      }
+    } else if (isProcessing && isPaused) {
+      // --- 新增的邏輯：暫停中點擊 ---
+      console.log('[自動播放][表格頁] 點擊背景遮罩 (已暫停)，僅關閉 Modal。');
+
+      // 只有表格頁需要關閉 Modal
+      if (!isListPage) {
+        closeModal(); // 直接關閉 Modal，不改變 isPaused 狀態
       }
     }
+    // 如果 isProcessing 為 false (已停止)，點擊遮罩不做任何事
   }
+
   function showModal(iframe) {
     overlayElement = document.getElementById(OVERLAY_ID);
     if (!overlayElement) {
