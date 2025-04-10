@@ -25,8 +25,8 @@
 // @connect      sutian.moe.edu.tw
 // @run-at       document-idle
 // @license      GNU GPLv3
-// @downloadURL https://update.greasyfork.org/scripts/531767/KIPSutian-autoplay.user.js
-// @updateURL https://update.greasyfork.org/scripts/531767/KIPSutian-autoplay.meta.js
+// @downloadURL  https://update.greasyfork.org/scripts/531767/KIPSutian-autoplay.user.js
+// @updateURL    https://update.greasyfork.org/scripts/531767/KIPSutian-autoplay.meta.js
 // ==/UserScript==
 
 (function () {
