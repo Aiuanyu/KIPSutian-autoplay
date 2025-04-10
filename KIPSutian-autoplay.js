@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.37
+// @version      4.37.1
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近5筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
@@ -1781,7 +1781,7 @@
   }
 
   /**
-   * 根據捲動位置更新控制按鈕容器的頂部位置
+   * 根據捲動位置更新控制按鈕容器的頂部位置，並控制內部 br 的顯示
    */
   function updateControlsPosition() {
     // 從您的常數定義中獲取 ID
@@ -1795,6 +1795,7 @@
     }
 
     let newTop = '10px'; // 預設值：捲動超過 header 或找不到 header 時
+    let showBreaks = false; // 預設不顯示 <br>
 
     if (header) {
       try {
@@ -1802,18 +1803,35 @@
         // 檢查捲動位置是否在 header 高度內
         if (window.scrollY <= headerHeight) {
           newTop = `${headerHeight + 10}px`; // 在 header 下方
+          // 只有在播放中且捲動在頂部時才需要顯示 <br>
+          if (isProcessing) {
+            showBreaks = true;
+          }
         }
-        // else: 維持預設值 '10px'
+        // else: 維持預設值 newTop = '10px' 且 showBreaks = false
       } catch (e) {
         console.error('[自動播放][定位] 計算 Header 高度或捲動位置時出錯:', e);
         // 出錯時也使用預設值
       }
     } else {
       // console.warn('[自動播放][定位] Header 元素未找到，使用預設 top: 10px');
+      // 找不到 header 也視為捲動超過，不顯示 <br>
+      showBreaks = false;
     }
 
     // 更新容器的 top 樣式
     controlsContainer.style.top = newTop;
+
+    // 更新 <br> 元素的顯示狀態
+    // 確保全域變數 breakBeforePauseButton 和 breakBeforeStatusDisplay 存在
+    if (breakBeforePauseButton && breakBeforeStatusDisplay) {
+      // 只有在 isProcessing 為 true 時才根據 showBreaks 決定，否則一律隱藏
+      const displayValue = isProcessing && showBreaks ? 'initial' : 'none';
+      breakBeforePauseButton.style.display = displayValue;
+      breakBeforeStatusDisplay.style.display = displayValue;
+    } else {
+      // console.warn('[自動播放][定位] 無法找到 br 元素');
+    }
   }
 
   /**
@@ -1880,17 +1898,11 @@
       if (pauseButton) {
         buttonContainer.appendChild(pauseButton);
         buttonContainer.insertBefore(breakBeforePauseButton, pauseButton);
-        Object.assign(breakBeforePauseButton.style, {
-          display: 'initial',
-        });
       }
       if (stopButton) buttonContainer.appendChild(stopButton);
       if (statusDisplay) {
         buttonContainer.appendChild(statusDisplay);
         buttonContainer.insertBefore(breakBeforeStatusDisplay, statusDisplay);
-        Object.assign(breakBeforeStatusDisplay.style, {
-          display: 'initial',
-        });
       }
 
       document.body.appendChild(buttonContainer);
