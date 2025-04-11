@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         KIPSutian-autoplay
+// @name         [測] KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.39
+// @version      5.0
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
@@ -27,6 +27,12 @@
 // @license      GNU GPLv3
 // @downloadURL  https://update.greasyfork.org/scripts/531767/KIPSutian-autoplay.user.js
 // @updateURL    https://update.greasyfork.org/scripts/531767/KIPSutian-autoplay.meta.js
+// @require      https://unpkg.com/remote-storage@latest/dist/remote-storage.min.js
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @connect      api.remote.storage
 // ==/UserScript==
 
 (function () {
@@ -79,6 +85,8 @@
   const LOCAL_STORAGE_KEY = 'KIP_AUTOPLAY_PROGRESS'; // localStorage 鍵名
   const MAX_PROGRESS_ENTRIES = 10; // 最大儲存筆數
   const PROGRESS_DROPDOWN_ID = 'userscript-progress-dropdown'; // 下拉選單 ID
+  const SYNC_USER_ID_KEY = 'KIPSutianAutoplay_SyncUserID'; // GM_setValue 的 key
+  const PROGRESS_STORAGE_KEY_REMOTE = 'KIPSutianAutoplay_Progress_Remote'; // remoteStorage 的 key (可與 local 不同)
 
   // --- 適應亮暗模式的高亮樣式 ---
   const CSS_IFRAME_HIGHLIGHT = `
@@ -171,6 +179,9 @@
   let isMobile = false;
   let isListPage = false;
   let progressDropdown = null; // 下拉選單引用
+  let remoteStorageInstance = null; // remoteStorage 的實例
+  let userSyncId = null; // 使用者設定的同步 ID (UUID)
+  let remoteSyncStatus = 'idle'; // 同步狀態: 'idle', 'pending', 'ok', 'error'
 
   // --- UI 元素引用 ---
   let breakBeforePauseButton = null;
@@ -520,8 +531,20 @@
     }
 
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(allProgress));
-      console.log(`[自動播放][進度] 已儲存 ${allProgress.length} 筆進度。`);
+      const progressDataString = JSON.stringify(allProgress); // 先轉換成字串
+
+      // 1. 儲存到 localStorage (原本的邏輯)
+      localStorage.setItem(LOCAL_STORAGE_KEY, progressDataString);
+      console.log(
+        `[自動播放][進度] 已儲存 ${allProgress.length} 筆進度到 localStorage。`
+      );
+
+      // 2. *** 新增：呼叫遠端儲存 ***
+      //    將同樣的字串傳給 remoteStorage 儲存
+      //    不需要 await，讓它在背景執行
+      saveRemoteProgress(progressDataString);
+
+      // 3. 更新下拉選單 (原本的邏輯)
       populateProgressDropdown();
     } catch (e) {
       console.error('[自動播放][進度] 儲存進度時發生錯誤:', e);
@@ -1913,6 +1936,234 @@
   }
 
   /**
+   * 創建並顯示同步設定 Modal
+   */
+  function openSyncModal() {
+    let modal = document.getElementById('sync-modal');
+    if (!modal) {
+      // --- 創建 Modal HTML ---
+      modal = document.createElement('div');
+      modal.id = 'sync-modal';
+      modal.innerHTML = `
+              <div id="sync-modal-content">
+                  <h2>同步設定</h2>
+                  <p>設定一個獨一無二的 ID，讓您的學習進度可以在不同裝置間同步。</p>
+                  <label for="uuid-input">您的同步 ID:</label>
+                  <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+                      <input type="text" id="uuid-input" placeholder="請產生或貼上 UUID" style="flex-grow: 1; padding: 5px;">
+                      <button id="copy-uuid" title="複製 ID"><i class="fas fa-copy"></i></button>
+                      <button id="generate-uuid" title="產生新 ID"><i class="fas fa-random"></i></button>
+                  </div>
+                  <div id="copy-feedback" style="font-size: 0.9em; color: green; height: 1.2em;"></div>
+                  <div style="text-align: right; margin-top: 15px;">
+                      <button id="save-uuid">儲存並啟用同步</button>
+                      <button id="close-sync-modal" style="margin-left: 10px;">關閉</button>
+                  </div>
+              </div>
+          `;
+      document.body.appendChild(modal);
+
+      // --- 添加 Modal 的 CSS ---
+      GM_addStyle(`
+              #sync-modal {
+                  position: fixed;
+                  top: 0; left: 0; width: 100%; height: 100%;
+                  background-color: rgba(0,0,0,0.5); /* 半透明背景 */
+                  display: none; /* 預設隱藏 */
+                  z-index: 10001; /* 比控制區高 */
+                  justify-content: center;
+                  align-items: center;
+              }
+              #sync-modal-content {
+                  /* --- 預設 (亮色模式) 樣式 --- */
+                  background-color: #fff;
+                  color: #333;
+                  padding: 20px 30px;
+                  border-radius: 8px;
+                  width: 90%;
+                  max-width: 500px;
+                  box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+              }
+
+              /* --- 使用媒體查詢來定義暗色模式樣式 --- */
+              @media (prefers-color-scheme: dark) {
+                  #sync-modal-content {
+                      background-color: #333;
+                      color: #eee;
+                  }
+              }
+
+              /* --- 其他 Modal 內部元素的樣式 --- */
+              #sync-modal-content h2 { margin-top: 0; }
+              #sync-modal-content button { padding: 8px 12px; border-radius: 4px; cursor: pointer; }
+              /* 您可以繼續添加 input, label 等其他樣式 */
+          `);
+
+      // --- 添加 Modal 內按鈕的事件監聽 ---
+      modal.querySelector('#generate-uuid').addEventListener('click', () => {
+        const uuidInput = modal.querySelector('#uuid-input');
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+          uuidInput.value = crypto.randomUUID();
+        } else {
+          // 簡單的 UUID v4 備援 (若瀏覽器不支援 crypto.randomUUID)
+          uuidInput.value = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(
+            /[xy]/g,
+            function (c) {
+              var r = (Math.random() * 16) | 0,
+                v = c == 'x' ? r : (r & 0x3) | 0x8;
+              return v.toString(16);
+            }
+          );
+          alert(
+            '已產生備援 UUID，建議使用支援 crypto.randomUUID 的瀏覽器以獲得更佳安全性。'
+          );
+        }
+      });
+
+      modal.querySelector('#copy-uuid').addEventListener('click', () => {
+        const uuidInput = modal.querySelector('#uuid-input');
+        const feedback = modal.querySelector('#copy-feedback');
+        if (navigator.clipboard && uuidInput.value) {
+          navigator.clipboard
+            .writeText(uuidInput.value)
+            .then(() => {
+              feedback.textContent = '已複製！';
+              setTimeout(() => {
+                feedback.textContent = '';
+              }, 2000);
+            })
+            .catch((err) => {
+              feedback.textContent = '複製失敗';
+              console.error('複製失敗:', err);
+            });
+        } else if (uuidInput.value) {
+          // navigator.clipboard 可能在非 https 或 localhost 下不可用
+          try {
+            uuidInput.select();
+            document.execCommand('copy');
+            feedback.textContent = '已複製 (備援)！';
+            setTimeout(() => {
+              feedback.textContent = '';
+            }, 2000);
+          } catch (e) {
+            feedback.textContent = '複製失敗';
+          }
+        }
+      });
+
+      modal.querySelector('#save-uuid').addEventListener('click', () => {
+        const uuidInput = modal.querySelector('#uuid-input');
+        const newUserId = uuidInput.value.trim();
+        // 基本驗證 (例如，不是空的)
+        if (newUserId) {
+          userSyncId = newUserId;
+          GM_setValue(SYNC_USER_ID_KEY, userSyncId); // 儲存到 GM 儲存區
+          console.log('[自動播放][同步] 同步 ID 已儲存:', userSyncId);
+          initializeRemoteStorage(); // 使用新 ID 初始化 (或重新初始化)
+          modal.style.display = 'none'; // 關閉 modal
+          updateSyncButtonUI(); // 更新按鈕狀態
+          // 可以考慮儲存成功後，觸發一次遠端儲存
+          // saveRemoteProgress(localStorage.getItem(PROGRESS_STORAGE_KEY)); // 傳入 stringified JSON
+        } else {
+          alert('同步 ID 不能為空！');
+        }
+      });
+
+      modal.querySelector('#close-sync-modal').addEventListener('click', () => {
+        modal.style.display = 'none';
+      });
+
+      // 點擊 Modal 背景也可以關閉
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) {
+          modal.style.display = 'none';
+        }
+      });
+    }
+
+    // --- 顯示 Modal 並載入目前儲存的 ID ---
+    const uuidInput = modal.querySelector('#uuid-input');
+    uuidInput.value = GM_getValue(SYNC_USER_ID_KEY, ''); // 讀取儲存的 ID
+    modal.style.display = 'flex'; // 使用 flex 來置中
+  }
+
+  /**
+   * 初始化 remoteStorage 實例 (如果 userSyncId 已設定)
+   */
+  function initializeRemoteStorage() {
+    userSyncId = GM_getValue(SYNC_USER_ID_KEY, null); // 讀取儲存的 ID
+    if (userSyncId) {
+      try {
+        // 檢查 RemoteStorage 是否已載入
+        if (typeof RemoteStorage !== 'undefined') {
+          remoteStorageInstance = new RemoteStorage({
+            userId: userSyncId,
+            instanceId: 'KIPSutian-autoplay', // 應用程式的固定 ID
+            // serverAddress: '...' // 如果需要指定非預設伺服器
+          });
+          console.log(
+            '[自動播放][同步] RemoteStorage 已使用 ID 初始化:',
+            userSyncId
+          );
+          remoteSyncStatus = 'idle'; // 重設狀態
+        } else {
+          console.error('[自動播放][同步] RemoteStorage library 未載入！');
+          remoteStorageInstance = null;
+          remoteSyncStatus = 'error';
+        }
+      } catch (e) {
+        console.error('[自動播放][同步] 初始化 RemoteStorage 時發生錯誤:', e);
+        remoteStorageInstance = null;
+        remoteSyncStatus = 'error';
+      }
+    } else {
+      console.log('[自動播放][同步] 未設定同步 ID，RemoteStorage 未初始化。');
+      remoteStorageInstance = null;
+      remoteSyncStatus = 'idle'; // 沒有 ID 時不算錯誤
+    }
+    updateSyncButtonUI(); // 更新按鈕狀態
+  }
+
+  /**
+   * (異步) 嘗試將進度儲存到 remoteStorage
+   * @param {string} progressDataString - JSON.stringify 後的進度資料
+   */
+  async function saveRemoteProgress(progressDataString) {
+    if (!remoteStorageInstance) {
+      // console.log('[自動播放][同步] RemoteStorage 未初始化，無法儲存遠端進度。');
+      // 不需要標記為 error，因為使用者可能尚未設定 ID
+      return;
+    }
+    if (
+      !progressDataString ||
+      progressDataString === 'null' ||
+      progressDataString === '[]'
+    ) {
+      console.log('[自動播放][同步] 無有效進度資料，跳過遠端儲存。');
+      return;
+    }
+
+    remoteSyncStatus = 'pending'; // 標記為處理中
+    updateSyncButtonUI(); // 更新 UI (例如，顯示載入圖示)
+
+    try {
+      console.log('[自動播放][同步] 嘗試儲存進度到遠端...');
+      await remoteStorageInstance.setItem(
+        PROGRESS_STORAGE_KEY_REMOTE,
+        progressDataString
+      );
+      remoteSyncStatus = 'ok'; // 成功
+      console.log('[自動播放][同步] 進度成功儲存到遠端。');
+    } catch (error) {
+      remoteSyncStatus = 'error'; // 失敗
+      console.error('[自動播放][同步] 儲存遠端進度失敗:', error);
+      // 在這裡可以觸發更明顯的錯誤提示，例如短暫改變按鈕顏色
+    } finally {
+      updateSyncButtonUI(); // 無論成功或失敗都更新最終 UI
+    }
+  }
+
+  /**
    * **修改：確保控制按鈕容器存在，並添加下拉選單 (下拉選單持續顯示)**
    */
   function ensureControlsContainer() {
@@ -1978,6 +2229,18 @@
         buttonContainer.insertBefore(breakBeforePauseButton, pauseButton);
       }
       if (stopButton) buttonContainer.appendChild(stopButton);
+
+      // 加「仝步」撳鈕仔
+      const syncButton = document.createElement('button');
+      syncButton.id = 'sync-settings-button'; // 給按鈕一個 ID
+      syncButton.innerHTML = '<i class="fas fa-sync"></i>'; // 使用 Font Awesome 圖示
+      syncButton.title = '設定仝步 ID'; // Tooltip
+      syncButton.style.margin = '0 5px'; // 與其他按鈕間隔
+      syncButton.addEventListener('click', openSyncModal); // 點擊時打開 Modal
+      // applyButtonStyles(syncButton); // 套用您統一的按鈕樣式 (如果有的話，或直接設定樣式) // 哭爸，我根本無這个函數，雙生仔小姐又閣……
+      buttonContainer.appendChild(syncButton); // *** 直接加到 buttonContainer ***
+      updateSyncButtonUI(); // (稍後會定義這個函數)
+
       if (statusDisplay) {
         buttonContainer.appendChild(statusDisplay);
         updateStatusDisplay(); // 設定初始狀態顯示
@@ -2067,6 +2330,65 @@
     return false;
   }
 
+  /**
+   * 更新同步按鈕的 UI (圖示、顏色、tooltip) 以反映狀態
+   */
+  function updateSyncButtonUI() {
+    const syncButton = document.getElementById('sync-settings-button');
+    if (!syncButton) return;
+
+    let iconClass = 'fas fa-sync'; // 預設圖示
+    let color = ''; // 預設顏色
+    let title = '設定同步 ID'; // 預設 tooltip
+
+    if (!userSyncId) {
+      iconClass = 'fas fa-plug'; // 未設定 ID 的圖示
+      color = 'grey';
+      title = '尚未設定同步 ID，點此設定';
+    } else {
+      switch (remoteSyncStatus) {
+        case 'pending':
+          iconClass = 'fas fa-spinner fa-spin'; // 處理中圖示
+          title = '正在同步...';
+          break;
+        case 'ok':
+          iconClass = 'fas fa-check-circle'; // 成功圖示
+          color = 'mediumseagreen';
+          title = '同步成功 | 點此修改 ID';
+          // 短暫顯示成功後恢復預設圖示？
+          setTimeout(() => {
+            const currentButton = document.getElementById(
+              'sync-settings-button'
+            );
+            if (currentButton && remoteSyncStatus === 'ok') {
+              // 再次檢查狀態
+              currentButton.innerHTML = '<i class="fas fa-sync"></i>';
+              currentButton.style.color = '';
+              currentButton.title = `同步 ID: ${userSyncId.substring(
+                0,
+                8
+              )}... | 點此修改`;
+            }
+          }, 2500); // 2.5 秒後恢復
+          break;
+        case 'error':
+          iconClass = 'fas fa-exclamation-triangle'; // 錯誤圖示
+          color = 'indianred';
+          title = '同步失敗，請檢查網路或稍後再試 | 點此修改 ID';
+          break;
+        case 'idle':
+        default:
+          iconClass = 'fas fa-sync';
+          title = `同步 ID: ${userSyncId.substring(0, 8)}... | 點此修改`; // 顯示部分 ID
+          break;
+      }
+    }
+
+    syncButton.innerHTML = `<i class="${iconClass}"></i>`;
+    syncButton.style.color = color;
+    syncButton.title = title;
+  }
+
   function initialize() {
     if (window.autoPlayerInitialized) {
       return;
@@ -2085,6 +2407,7 @@
     createControlButtons();
     ensureControlsContainer(); // 確保容器和下拉選單顯示
     setTimeout(injectRowPlayButtons, 1000);
+    initializeRemoteStorage();
 
     // --- ResizeObserver 邏輯 ---
     try {
