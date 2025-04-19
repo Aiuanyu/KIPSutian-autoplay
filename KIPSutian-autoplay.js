@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.40
+// @version      4.41
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/*
@@ -1070,11 +1070,28 @@
       if (!isListPage && !isPaused) {
         closeModal();
       }
+
       if (!isPaused) {
+        // 只有在非暫停狀態下才增加索引
         currentItemIndex++;
+        console.log(
+          `[自動播放][進度] 項目處理完畢，索引遞增至 ${currentItemIndex}。`
+        );
+
+        // *** 在這裡儲存進度 ***
+        // 因為 currentItemIndex 已經指向下一個項目，符合 saveCurrentProgress 的預期
+        console.log(
+          `[自動播放][進度] 儲存下一個項目 (${currentItemIndex}) 的進度。`
+        );
+        saveCurrentProgress(); // <--- 合併到這裡
       } else {
-        console.log(`[自動播放][偵錯] 處於暫停狀態，索引保持不變`);
+        // 如果是暫停狀態，索引保持不變
+        console.log(
+          `[自動播放][偵錯] 處於暫停狀態，索引保持在 ${currentItemIndex}。`
+        );
+        // 暫停時的儲存由 pausePlayback 函數處理，這裡不需要重複儲存
       }
+
       if (currentItemIndex < totalItems && isProcessing && !isPaused) {
         try {
           await interruptibleSleep(DELAY_BETWEEN_ITEMS_MS).promise;
