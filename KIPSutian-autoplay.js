@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.41
+// @version      4.42
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/*
@@ -943,16 +943,37 @@
 
   async function processItemsSequentially() {
     console.log('[自動播放] processItemsSequentially 開始');
+    let hasLoggedPauseMessage = false; // <--- 新增標記
+
     while (currentItemIndex < totalItems && isProcessing) {
       while (isPaused && isProcessing) {
-        console.log(
-          `[自動播放] 主流程已暫停 (索引 ${currentItemIndex})，等待繼續...`
-        );
-        updateStatusDisplay();
+        // --- 修改：檢查標記 ---
+        if (!hasLoggedPauseMessage) {
+          console.log(
+            `[自動播放] 主流程已暫停 (索引 ${currentItemIndex})，等待繼續...`
+          );
+          // *** 新增：在這裡呼叫一次 updateStatusDisplay ***
+          updateStatusDisplay();
+          // *** 新增結束 ***
+          hasLoggedPauseMessage = true; // 設定標記
+        }
+        // --- 修改結束 ---
+        // *** 移除：不再於迴圈內重複呼叫 updateStatusDisplay ***
+        // updateStatusDisplay(); // <--- 刪除或註解掉這一行
+        // *** 移除結束 ***
         await sleep(500);
         if (!isProcessing) break;
       }
       if (!isProcessing) break;
+
+      // --- 新增：重設標記 ---
+      if (isProcessing) {
+        // 確保不是因為停止才跳出迴圈
+        hasLoggedPauseMessage = false;
+      }
+      // --- 新增結束 ---
+
+      // *** 保持：恢復播放後呼叫一次 updateStatusDisplay ***
       updateStatusDisplay();
       const currentItem = itemsToProcess[currentItemIndex];
       console.log(
