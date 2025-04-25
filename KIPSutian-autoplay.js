@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.44
+// @version      4.45
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/*
@@ -1479,68 +1479,58 @@
     if (!statusDisplay) return; // 如果狀態顯示元素不存在，直接返回
 
     const allProgress = loadProgress();
-    const currentKey = getProgressKey(window.location.href);
-    const savedEntry = allProgress.find((p) => p.key === currentKey);
+    // ** 修改：直接找最新的記錄，不再管當前頁面 **
+    const latestEntry = allProgress.length > 0 ? allProgress[0] : null;
 
     let displayText = '';
     let indexForLink = -1;
     let displayNum = null;
     let statusPrefix = '';
     let showStatus = false;
+    let baseUrlForLink = ''; // ** 修改：基礎 URL 從最新記錄獲取 **
 
-    if (
-      isProcessing &&
-      itemsToProcess.length > 0 &&
-      itemsToProcess[currentItemIndex]
-    ) {
-      // --- 情況 1: 正在播放或暫停中 ---
-      indexForLink = itemsToProcess[currentItemIndex].originalIndex;
-      displayNum = getDisplayedNumber(indexForLink);
-      statusPrefix = !isPaused ? '播放中' : '已暫停';
+    if (latestEntry) {
+      // --- 情況：有儲存的全局最新進度 ---
+      indexForLink = latestEntry.nextIndex;
+      displayNum = latestEntry.displayNumber; // 直接使用儲存的顯示編號
+      // ** 修改：狀態文字統一為 "上次進度" 或 "已完成" **
+      statusPrefix = indexForLink === -1 ? '已完成' : '上次進度';
       showStatus = true;
-    } else if (savedEntry) {
-      // --- 情況 2: 已停止，但有此頁面的儲存紀錄 ---
-      indexForLink = savedEntry.nextIndex;
-      displayNum = savedEntry.displayNumber; // 直接使用儲存的顯示編號
-      statusPrefix = '已停止';
-      showStatus = true;
+      baseUrlForLink = latestEntry.url; // ** 使用最新記錄的 URL **
 
       if (indexForLink === -1) {
-        // 如果儲存的紀錄是已完成
+        // 如果最新紀錄是已完成
         displayText = '已完成';
-        // 不需要連結，直接顯示文字
         statusDisplay.innerHTML = displayText;
         statusDisplay.style.display = 'inline-block';
         return; // 完成處理，直接返回
       }
     }
-    // else: --- 情況 3: 未播放且無儲存紀錄 --- -> showStatus 維持 false
+    // else: --- 情況：沒有任何儲存紀錄 --- -> showStatus 維持 false
 
     // --- 根據情況產生最終顯示內容 ---
     if (
       showStatus &&
       indexForLink >= 0 &&
       displayNum !== null &&
-      displayNum !== undefined
+      displayNum !== undefined &&
+      baseUrlForLink // 確保有基礎 URL
     ) {
       // 準備建立連結
       try {
-        const baseUrl = new URL(window.location.href);
-        // 移除可能存在的舊參數
+        const baseUrl = new URL(baseUrlForLink); // ** 使用最新記錄的基礎 URL **
+        // 移除可能存在的舊參數 (以防萬一)
         baseUrl.searchParams.delete(LOAD_PROGRESS_PARAM);
         baseUrl.searchParams.delete(AUTOPLAY_PARAM);
         // 添加新的參數
         baseUrl.searchParams.set(LOAD_PROGRESS_PARAM, indexForLink);
 
         const targetUrl = baseUrl.toString();
-        // *** 已移除反斜線 ***
-        const linkHtml = `<a href="${targetUrl}" title="從此項目 (#${displayNum}) 開始播放">#${displayNum}</a>`;
-        // *** 已移除反斜線 ***
+        const linkHtml = `<a href="${targetUrl}" title="跳至上次進度 (#${displayNum})">#${displayNum}</a>`; // ** 修改 title **
         displayText = `${statusPrefix} (${linkHtml})`;
       } catch (e) {
-        console.error('[自動播放][狀態] 建立狀態連結時出錯:', e);
+        console.error('[自動播放][狀態] 建立全局狀態連結時出錯:', e);
         // 出錯時，顯示不帶連結的文字
-        // *** 已移除反斜線 ***
         displayText = `${statusPrefix} (#${displayNum})`;
       }
       statusDisplay.innerHTML = displayText;
@@ -1550,7 +1540,7 @@
       statusDisplay.innerHTML = '已完成';
       statusDisplay.style.display = 'inline-block';
     } else {
-      // 情況 3: 不顯示狀態 (未播放且無紀錄)
+      // 情況：不顯示狀態 (沒有任何紀錄)
       statusDisplay.innerHTML = '';
       statusDisplay.style.display = 'none';
     }
@@ -2027,7 +2017,7 @@
       if (stopButton) buttonContainer.appendChild(stopButton);
       if (statusDisplay) {
         buttonContainer.appendChild(statusDisplay);
-        updateStatusDisplay(); // 設定初始狀態顯示
+        // updateStatusDisplay(); // **修改：移除初始狀態顯示，避免載入時就顯示"上次進度"**
         buttonContainer.insertBefore(breakBeforeStatusDisplay, statusDisplay);
       }
 
