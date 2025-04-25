@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.46
+// @version      4.5
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/*
@@ -31,7 +31,36 @@
 // ==/UserScript==
 
 (function () {
-  'use strict';
+  ('use strict');
+
+  // --- 修改：更精確地檢查是否為腳本自身創建的 iframe ---
+  try {
+    // 只有當：1. 我們在 iframe 中 (window.top !== window.self)
+    //         且 2. 這個 iframe 和頂層視窗是同一個來源 (origin)
+    //         才判斷為腳本自身創建的 iframe，並退出執行。
+    if (
+      window.top !== window.self &&
+      window.top.location.origin === window.self.location.origin
+    ) {
+      console.log(
+        '[KIPSutian-autoplay] 偵測著是佇仝一个 domain 內底的 iframe (可能是跤本家己開的)，莫佇遮執行。Detected running inside a same-origin iframe, likely created by the script. Exiting.'
+      );
+      return; // 提前終止腳本在同源 iframe 中的執行
+    }
+    // 若是頂層視窗，或是在不同來源的 iframe 中 (例如整個 sutian 被外部嵌入)，則繼續執行腳本。
+    console.log(
+      '[KIPSutian-autoplay] 是佇頂層窗仔／無仝源 iframe 咧行，著繼續。Running in top-level window or cross-origin iframe. Proceeding.'
+    );
+  } catch (e) {
+    // 如果嘗試存取 window.top.location.origin 時發生錯誤 (通常是因為跨來源安全性限制)，
+    // 這也表示我們正處於一個被不同來源嵌入的 iframe 中。
+    // 在這種情況下，我們也希望腳本繼續執行。
+    console.log(
+      '[KIPSutian-autoplay] 偵測著無仝源 iframe 環境（提袂著），著繼續。Detected cross-origin iframe context (access error). Proceeding.'
+    );
+    // 不執行 return，腳本會繼續往下跑
+  }
+  // --- 檢查結束 ---
 
   // --- 配置 ---
   const MODAL_WIDTH = '80vw';
