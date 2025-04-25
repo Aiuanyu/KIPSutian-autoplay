@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.42
+// @version      4.44
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/*
@@ -124,9 +124,15 @@
         #${MOBILE_INTERACTION_BOX_ID} {
             position: fixed; background-color: ${MOBILE_BOX_BG_COLOR}; color: ${MOBILE_BOX_TEXT_COLOR};
             display: flex; justify-content: center; align-items: center;
-            font-size: 10vw; font-weight: bold; text-align: center; z-index: 10005;
+            font-size: 7vw; font-weight: bold; text-align: center; z-index: 10005;
             cursor: pointer; padding: 20px; box-sizing: border-box; border-radius: 8px;
             box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+        }
+        /* --- 新增：使用媒體查詢調整寬螢幕字體大小 --- */
+        @media (min-width: 768px) { /* 768px 是一個常用的斷點，您可以調整 */
+            #${MOBILE_INTERACTION_BOX_ID} {
+                font-size: 5vw;
+            }
         }
         @media (prefers-color-scheme: dark) {
             #${MOBILE_INTERACTION_BOX_ID} {
@@ -170,6 +176,8 @@
   let resizeDebounceTimeout = null;
   let lastHighlightTargets = { wide: null, narrow: null, list: null };
   let isMobile = false;
+  let isDesktopChromiumBased = false; // 新增：是否為桌面 Chrome 系瀏覽器
+  let isInternalAutoNext = false; // 新增：是否為腳本內部自動跳頁觸發
   let isListPage = false;
   let progressDropdown = null; // 下拉選單引用
 
@@ -1983,7 +1991,7 @@
         Object.assign(buttonContainer.style, {
           position: positionType,
           top: fixedTopOffset + 'px',
-          left: '10px',
+          right: '10px',
           zIndex: '10001',
           backgroundColor: 'rgba(255, 255, 255, 0.8)',
           padding: '5px 10px',
@@ -1999,7 +2007,7 @@
         Object.assign(buttonContainer.style, {
           position: 'fixed',
           top: '10px',
-          left: '10px',
+          right: '10px',
           zIndex: '10001',
           backgroundColor: 'rgba(255, 255, 255, 0.8)',
           padding: '5px 10px',
@@ -2047,7 +2055,7 @@
       ? 'a[href^="/zh-hant/su/"]'
       : 'a[href^="/und-hani/su/"]';
   }
-  function showMobileInteractionOverlay(callback) {
+  function showInteractionPromptOverlay(callback) {
     if (
       document.getElementById(MOBILE_INTERACTION_BOX_ID) ||
       document.getElementById(MOBILE_BG_OVERLAY_ID)
@@ -2059,7 +2067,8 @@
     document.body.appendChild(bgOverlay);
     const interactionBox = document.createElement('div');
     interactionBox.id = MOBILE_INTERACTION_BOX_ID;
-    interactionBox.textContent = '手機上請點擊後繼續播放';
+    interactionBox.innerHTML =
+      '若欲繼續放送進度，請點一下畫面<br>Nā beh kè-sio̍k hòng-sàng tsìn-tōo, tshiánn tiám tsit-ê uē-bīn';
     Object.assign(interactionBox.style, {
       position: 'fixed',
       width: MODAL_WIDTH,
@@ -2112,7 +2121,20 @@
     }
     window.autoPlayerInitialized = true;
     isMobile = navigator.userAgent.toLowerCase().includes('mobile');
-    console.log(`[自動播放] 初始化腳本 v4.34.0 ... isMobile: ${isMobile}`); // 更新版本號
+    // --- 新增：偵測是否為桌面 Chrome 系瀏覽器 ---
+    if (!isMobile) {
+      // 只有桌面才需要判斷
+      const userAgent = navigator.userAgent;
+      // 檢查是否包含 Chrome，但不包含 Edge (Edg/)
+      // 注意：這可能也會包含其他 Chromium 核心瀏覽器，但通常行為類似
+      if (userAgent.includes('Chrome')) {
+        // 只要包含 Chrome 字樣就視為需要互動 (包含 Edge)
+        isDesktopChromiumBased = true;
+      }
+    }
+    console.log(
+      `[自動播放] 初始化腳本 v4.43b ... isMobile: ${isMobile}, isDesktopChromiumBased: ${isDesktopChromiumBased}`
+    );
     GM_addStyle(
       CSS_IFRAME_HIGHLIGHT +
         CSS_PAUSE_HIGHLIGHT +
@@ -2258,15 +2280,17 @@
     const urlParams = new URLSearchParams(window.location.search);
     let startIndexFromUrl = 0; // 存的是 originalIndex
     let loadFromProgress = false;
+    isInternalAutoNext = false; // ** 初始值設為 false **
 
     if (urlParams.has(LOAD_PROGRESS_PARAM)) {
       const progressIndex = parseInt(urlParams.get(LOAD_PROGRESS_PARAM), 10);
       if (!isNaN(progressIndex) && progressIndex >= 0) {
         // 允許 0
         startIndexFromUrl = progressIndex;
-        loadFromProgress = true;
+        loadFromProgress = true; // ** 設為 true，表示外部觸發 **
+        isInternalAutoNext = false; // ** 確保設為 false **
         console.log(
-          `[自動播放] 偵測到 ${LOAD_PROGRESS_PARAM} 參數，請求起始 originalIndex: ${startIndexFromUrl}`
+          `[自動播放] 偵測到 ${LOAD_PROGRESS_PARAM} 參數 (外部觸發)，請求起始 originalIndex: ${startIndexFromUrl}`
         );
         const newUrl = new URL(window.location.href);
         newUrl.searchParams.delete(LOAD_PROGRESS_PARAM);
@@ -2282,15 +2306,20 @@
         history.replaceState(null, '', newUrl.toString());
       }
     } else if (urlParams.has(AUTOPLAY_PARAM)) {
-      console.log(`[自動播放] 偵測到 ${AUTOPLAY_PARAM} 參數，準備自動啟動...`);
-      startIndexFromUrl = 0;
-      loadFromProgress = true;
+      console.log(
+        `[自動播放] 偵測到 ${AUTOPLAY_PARAM} 參數 (內部自動跳頁)，準備自動啟動...`
+      );
+      startIndexFromUrl = 0; // 內部跳頁總是從頭開始
+      loadFromProgress = false; // ** 設為 false，非外部觸發 **
+      isInternalAutoNext = true; // ** 設為 true **
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.delete(AUTOPLAY_PARAM);
       history.replaceState(null, '', newUrl.toString());
     }
 
-    if (loadFromProgress) {
+    // --- if (loadFromProgress || isInternalAutoNext) ---
+    // ** 修改判斷條件，只要有任一觸發就繼續 **
+    if (loadFromProgress || isInternalAutoNext) {
       let elapsedTime = 0;
       const waitForContentAndStart = () => {
         console.log('[自動播放][等待] 檢查內容是否存在...');
@@ -2310,13 +2339,26 @@
         }
         if (contentExists) {
           console.log('[自動播放][等待] 內容已找到。');
-          if (isMobile) {
-            console.log('[自動播放] 偵測為行動裝置，顯示互動提示。');
-            const mobileClickHandler = () =>
+
+          // --- 修改：根據新的條件判斷是否需要互動 ---
+          // 條件：是手機，或者 (是桌面 Chromium 系瀏覽器 且 是由外部 URL 參數觸發的)
+          const requiresInteraction =
+            isMobile || (isDesktopChromiumBased && loadFromProgress); // ** 使用 loadFromProgress **
+
+          if (requiresInteraction) {
+            // ** 修改日誌訊息，更清晰 **
+            console.log(
+              `[自動播放] 需要使用者互動以啟動播放 (isMobile: ${isMobile}, isDesktopChromiumBased: ${isDesktopChromiumBased}, triggeredByURL: ${loadFromProgress})，顯示提示。`
+            );
+            const interactionCallback = () =>
               initiateAutoPlayback(startIndexFromUrl);
-            showMobileInteractionOverlay(mobileClickHandler);
+            showInteractionPromptOverlay(interactionCallback);
           } else {
-            console.log('[自動播放] 偵測為非行動裝置，直接啟動播放。');
+            // 不需要互動的情況 (例如：桌面 Firefox，或桌面 Chrome 但非外部 URL 觸發，或內部自動跳頁)
+            // ** 修改日誌訊息，更清晰 **
+            console.log(
+              `[自動播放] 不需要使用者互動 (isMobile: ${isMobile}, isDesktopChromiumBased: ${isDesktopChromiumBased}, triggeredByURL: ${loadFromProgress}, isInternalAutoNext: ${isInternalAutoNext})，直接啟動播放。`
+            );
             initiateAutoPlayback(startIndexFromUrl);
           }
         } else {
