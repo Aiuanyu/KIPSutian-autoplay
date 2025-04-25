@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.45
+// @version      4.46
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/*
@@ -1600,14 +1600,88 @@
       return;
     }
     if (isProcessing && !isPaused) {
-      alert('目前正在播放中，請先停止或等待完成才能從指定列開始。');
-      return;
+      // **修改：播放中點擊其他行按鈕 -> 停止當前，立即開始新的**
+      console.log(
+        `[自動播放] 播放中點擊第 ${
+          rowIndex + 1
+        } 行按鈕，停止當前並從該行開始...`
+      );
+      // 1. 停止當前播放的核心邏輯 (不完全重置 UI)
+      isProcessing = false;
+      isPaused = false;
+      if (currentSleepController) {
+        currentSleepController.cancel('row_clicked_interrupt');
+      }
+      if (!isListPage) {
+        closeModal(); // 關閉 iframe (如果是表格頁)
+      }
+      // 清除舊高亮
+      const elementsToClear = [
+        lastHighlightTargets.wide,
+        lastHighlightTargets.narrow,
+        lastHighlightTargets.list,
+      ];
+      elementsToClear.forEach((el) => {
+        if (el) {
+          el.classList.remove(
+            ROW_HIGHLIGHT_CLASS_MAIN,
+            ROW_PAUSED_HIGHLIGHT_CLASS
+          );
+          el.style.backgroundColor = '';
+          el.style.transition = '';
+          el.style.animation = '';
+        }
+      });
+      lastHighlightTargets = { wide: null, narrow: null, list: null };
+
+      // 2. 短暫延遲確保狀態更新
+      await sleep(100); // 給予一點時間處理狀態變化
+
+      // 3. 從新點擊的行開始播放
+      startPlayback(rowIndex);
+      return; // 完成處理，直接返回
     }
     if (isProcessing && isPaused) {
-      console.log('[自動播放] 偵測到處於暫停狀態，先停止當前流程...');
-      stopPlayback();
+      // **修改：暫停中點擊其他行按鈕 -> 也採用停止核心邏輯，立即開始新的**
+      console.log(
+        `[自動播放] 暫停中點擊第 ${
+          rowIndex + 1
+        } 行按鈕，停止當前並從該行開始...`
+      );
+      // 1. 停止當前暫停狀態的核心邏輯 (不完全重置 UI)
+      isProcessing = false; // 設為 false，因為要開始新的了
+      isPaused = false;
+      // if (currentSleepController) { currentSleepController.cancel('paused_row_clicked_interrupt'); } // 暫停時通常沒有 sleep controller
+      if (!isListPage) {
+        closeModal(); // 確保 iframe 關閉 (遮罩暫停時應已關閉)
+      }
+      // 清除舊高亮 (暫停時是閃爍高亮)
+      const elementsToClear = [
+        lastHighlightTargets.wide,
+        lastHighlightTargets.narrow,
+        lastHighlightTargets.list,
+      ];
+      elementsToClear.forEach((el) => {
+        if (el) {
+          el.classList.remove(
+            ROW_HIGHLIGHT_CLASS_MAIN,
+            ROW_PAUSED_HIGHLIGHT_CLASS // 移除閃爍
+          );
+          el.style.backgroundColor = '';
+          el.style.transition = '';
+          el.style.animation = '';
+        }
+      });
+      lastHighlightTargets = { wide: null, narrow: null, list: null };
+
+      // 2. 短暫延遲確保狀態更新
       await sleep(100);
+
+      // 3. 從新點擊的行開始播放
+      startPlayback(rowIndex);
+      return; // 完成處理，直接返回
     }
+    // **保持：非播放/非暫停狀態下點擊 -> 直接開始**
     startPlayback(rowIndex);
   }
   function ensureFontAwesome() {
