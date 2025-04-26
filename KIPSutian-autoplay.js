@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.5
+// @version      4.51
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/*
@@ -654,10 +654,14 @@
     );
   }
   function closeModal() {
+    console.log('[自動播放] closeModal called.');
+    // *** 新增：在設為 null 前，先從 DOM 移除 iframe ***
     if (currentIframe && currentIframe.parentNode) {
-      currentIframe.remove();
+      console.log(`[自動播放] Removing iframe ${currentIframe.id} from DOM.`);
+      currentIframe.parentNode.removeChild(currentIframe);
     }
-    currentIframe = null;
+    // *** 修改結束 ***
+    currentIframe = null; // 在移除後才設為 null
     if (overlayElement) {
       overlayElement.removeEventListener('click', handleOverlayClick);
       if (overlayElement.parentNode) {
@@ -665,15 +669,32 @@
       }
       overlayElement = null;
     }
+    // --- 恢復這段邏輯 ---
     if (currentSleepController && !isListPage) {
+      // 當 Modal 關閉時，也取消可能正在進行的 iframe 內部延遲
+      // (例如 handleIframeContent 中的音檔間隔或播放等待)
+      console.log(
+        '[自動播放][closeModal] 偵測到關閉 Modal，取消當前的 sleep controller。'
+      );
       currentSleepController.cancel('modal_closed');
-      currentSleepController = null;
+      currentSleepController = null; // 清理引用
     }
+    // --- 修改結束 ---
   }
   async function handleIframeContent(iframe, url) {
+    // *** 新增：防止 handleIframeContent 重複執行 ***
+    if (iframe._processingStarted) {
+      console.warn(
+        `[自動播放][表格頁] handleIframeContent for ${iframe.id} 被重複呼叫，已忽略。 URL: ${url}`
+      );
+      return; // 如果已經開始處理，直接返回
+    }
+    iframe._processingStarted = true; // 標記為已開始處理
+    // *** 修改結束 ***
+
     let iframeDoc;
     try {
-      await sleep(150);
+      await sleep(150); // 等待 iframe 內容可能存在的延遲載入
       iframeDoc = iframe.contentWindow.document;
       addStyleToIframe(iframeDoc, CSS_IFRAME_HIGHLIGHT);
       const audioButtons = iframeDoc.querySelectorAll(AUDIO_INDICATOR_SELECTOR);
@@ -690,10 +711,12 @@
             await sleep(500);
             if (!isProcessing) break;
           }
-          if (!isProcessing || isPaused) {
-            i--;
-            continue;
-          }
+          // --- 移除這段可能導致問題的檢查 ---
+          // if (!isProcessing || isPaused) {
+          //   i--;
+          //   continue;
+          // }
+          // --- 修改結束 ---
           const button = audioButtons[i];
           if (!button || !iframeDoc.body.contains(button)) {
             console.warn(`[自動播放][表格頁] 按鈕 ${i + 1} 失效，跳過。`);
@@ -770,10 +793,15 @@
         error
       );
     } finally {
+      // 移除這段，因為 interruptibleSleep 內部會處理 currentSleepController = null
+      // 而且外部的取消操作 (pause/stop/row_click) 也會處理取消。
+      /*
       if (currentSleepController) {
         currentSleepController.cancel('content_handled_exit');
         currentSleepController = null;
       }
+      */
+      console.log(`[自動播放][表格頁] handleIframeContent 執行完畢 (${url})`);
     }
   }
 
@@ -1671,40 +1699,18 @@
       return; // 完成處理，直接返回
     }
     if (isProcessing && isPaused) {
-      // **修改：暫停中點擊其他行按鈕 -> 也採用停止核心邏輯，立即開始新的**
+      // **修改：暫停中點擊其他行按鈕 -> 執行完整的停止，再開始新的**
       console.log(
         `[自動播放] 暫停中點擊第 ${
           rowIndex + 1
-        } 行按鈕，停止當前並從該行開始...`
+        } 行按鈕，執行完整停止後從該行開始...`
       );
-      // 1. 停止當前暫停狀態的核心邏輯 (不完全重置 UI)
-      isProcessing = false; // 設為 false，因為要開始新的了
-      isPaused = false;
-      // if (currentSleepController) { currentSleepController.cancel('paused_row_clicked_interrupt'); } // 暫停時通常沒有 sleep controller
-      if (!isListPage) {
-        closeModal(); // 確保 iframe 關閉 (遮罩暫停時應已關閉)
-      }
-      // 清除舊高亮 (暫停時是閃爍高亮)
-      const elementsToClear = [
-        lastHighlightTargets.wide,
-        lastHighlightTargets.narrow,
-        lastHighlightTargets.list,
-      ];
-      elementsToClear.forEach((el) => {
-        if (el) {
-          el.classList.remove(
-            ROW_HIGHLIGHT_CLASS_MAIN,
-            ROW_PAUSED_HIGHLIGHT_CLASS // 移除閃爍
-          );
-          el.style.backgroundColor = '';
-          el.style.transition = '';
-          el.style.animation = '';
-        }
-      });
-      lastHighlightTargets = { wide: null, narrow: null, list: null };
+      // 1. 執行完整的停止函數
+      stopPlayback(); // <--- 改為呼叫完整的 stopPlayback
 
-      // 2. 短暫延遲確保狀態更新
-      await sleep(100);
+      // 2. 短暫延遲確保狀態更新和清理完成
+      // *** 增加延遲，給瀏覽器更多時間處理 modal 關閉和 DOM 清理 ***
+      await sleep(500); // Increased delay from 100ms to 500ms
 
       // 3. 從新點擊的行開始播放
       startPlayback(rowIndex);
