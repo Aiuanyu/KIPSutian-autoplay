@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.51.2
+// @version      4.52
 // @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/*
@@ -757,10 +757,15 @@
             await interruptibleSleep(actualDelayMs).promise;
           } catch (error) {
             if (error.isCancellation) {
+              // --- MODIFICATION: Reset _processingStarted if paused/stopped/row_clicked ---
+              if (error.reason === 'paused' || error.reason === 'stopped' || error.reason === 'row_clicked_interrupt') {
+                iframe._processingStarted = false;
+                console.log(`[自動播放][表格頁] 音檔播放等待被 '${error.reason}' 中斷，重設 _processingStarted 予 ${iframe.id}`);
+              }
               if (iframeDoc.body.contains(button)) {
                 button.classList.remove(HIGHLIGHT_CLASS);
               }
-              break;
+              break; // Break from audio button loop
             } else {
               throw error;
             }
@@ -775,8 +780,14 @@
             try {
               await interruptibleSleep(DELAY_BETWEEN_CLICKS_MS).promise;
             } catch (error) {
-              if (error.isCancellation) break;
-              else throw error;
+              if (error.isCancellation) {
+                // --- MODIFICATION: Reset _processingStarted if paused/stopped/row_clicked ---
+                if (error.reason === 'paused' || error.reason === 'stopped' || error.reason === 'row_clicked_interrupt') {
+                  iframe._processingStarted = false;
+                  console.log(`[自動播放][表格頁] 音檔間等待被 '${error.reason}' 中斷，重設 _processingStarted 予 ${iframe.id}`);
+                }
+                break; // Break from audio button loop
+              } else { throw error; }
             } finally {
               currentSleepController = null;
             }
