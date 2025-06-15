@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         KIPSutian-autoplay
 // @namespace    aiuanyu
-// @version      4.52
-// @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。
+// @version      4.53b
+// @description  自動開啟查詢結果表格/列表中每個詞目連結於 Modal iframe (表格) 或直接播放音檔 (列表)，依序播放音檔(自動偵測時長)，主表格/列表自動滾動高亮(播放時持續綠色，暫停時僅閃爍，表格頁同步高亮)，處理完畢後自動跳轉下一頁繼續播放，可即時暫停/停止/點擊背景暫停(表格)/點擊表格/列表列播放，並根據亮暗模式高亮按鈕。新增：儲存/載入最近10筆播放進度(使用絕對索引與完整URL，下拉選單顯示頁面編號)、進度連結。區分按鈕暫停(不關Modal)與遮罩暫停(關Modal)行為，調整下拉選單邊距。控制區動態定位。齒盤 global hotkey（燒齒）。
 // @author       Aiuanyu 愛灣語 + Gemini
 // @match        http*://sutian.moe.edu.tw/*
 // @match        http*://sutian.moe.edu.tw/und-hani/tshiau/*
@@ -2225,6 +2225,78 @@
     return false;
   }
 
+  // --- 全域快捷鍵處理 ---
+  function handleGlobalHotkeys(event) {
+    const activeEl = document.activeElement;
+    const interactiveTags = ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A']; // A 標籤也算，避免點擊連結時觸發
+    const isInteractiveFocused = activeEl &&
+                                 (interactiveTags.includes(activeEl.tagName) ||
+                                  activeEl.isContentEditable ||
+                                  activeEl.getAttribute('role') === 'button' ||
+                                  activeEl.getAttribute('role') === 'link' ||
+                                  (progressDropdown && activeEl.id === PROGRESS_DROPDOWN_ID)); // 下拉選單也算
+
+    if (event.key === ' ') { // Space 鍵
+      if (isInteractiveFocused) {
+        console.log('[自動播放][Hotkey] Space 鍵：Focus 佇互動元素，無處理。');
+        return; // 若 focus 佇輸入框等，就莫處理
+      }
+      event.preventDefault(); // 避免頁面滾動
+
+      if (!isProcessing && !isPaused) { // 狀況1：閒置中
+        console.log('[自動播放][Hotkey] Space 鍵：閒置中，嘗試開始/載入進度。');
+        const allProgress = loadProgress();
+        if (allProgress.length > 0) {
+          const latestProgress = allProgress[0];
+          if (latestProgress.nextIndex === -1) { // 上次已完成
+            console.log('[自動播放][Hotkey] Space 鍵：上次已完成，對目前頁面頭開始。');
+            startPlayback(0);
+          } else {
+            let urlToLoad = latestProgress.url;
+            // 確保 nextIndex 有效才加入 LOAD_PROGRESS_PARAM
+            if (latestProgress.nextIndex !== undefined && latestProgress.nextIndex !== null && latestProgress.nextIndex >= 0) {
+              try {
+                const tempUrl = new URL(urlToLoad);
+                tempUrl.searchParams.delete(AUTOPLAY_PARAM); // 清掉舊的 autoplay
+                tempUrl.searchParams.set(LOAD_PROGRESS_PARAM, latestProgress.nextIndex);
+                urlToLoad = tempUrl.toString();
+                console.log(`[自動播放][Hotkey] Space 鍵：載入最新進度並開始: ${urlToLoad}`);
+                window.location.href = urlToLoad;
+              } catch (e) {
+                console.error('[自動播放][Hotkey] Space 鍵：處理最新進度 URL 時出錯，改對目前頁面頭開始。', e);
+                startPlayback(0);
+              }
+            } else { // nextIndex 無效，可能代表是舊格式的 "已完成" 或其他問題
+              console.log('[自動播放][Hotkey] Space 鍵：最新進度 nextIndex 無效，對目前頁面頭開始。');
+              startPlayback(0);
+            }
+          }
+        } else { // 無任何進度紀錄
+          console.log('[自動播放][Hotkey] Space 鍵：無進度紀錄，對目前頁面頭開始。');
+          startPlayback(0);
+        }
+      } else if (isProcessing && !isPaused) { // 狀況2：播放中
+        console.log('[自動播放][Hotkey] Space 鍵：播放中，執行暫停。');
+        pausePlayback();
+      } else if (isProcessing && isPaused) { // 狀況3：暫停中
+        console.log('[自動播放][Hotkey] Space 鍵：暫停中，執行繼續。');
+        startPlayback(); // 會自動處理繼續播放
+      }
+    } else if (event.key === 'Escape') { // Esc 鍵
+      if (isInteractiveFocused) {
+        console.log('[自動播放][Hotkey] Esc 鍵：Focus 佇互動元素，執行 blur。');
+        activeEl.blur();
+        event.preventDefault(); // 可能也需要避免其他 Esc 的預設行為
+      } else {
+        if (isProcessing || isPaused) { // 無 focus 互動元素，且播放中或暫停中
+          console.log('[自動播放][Hotkey] Esc 鍵：無 Focus 且播放/暫停中，執行停止。');
+          stopPlayback();
+          event.preventDefault();
+        }
+      }
+    }
+  }
+
   function initialize() {
     if (window.autoPlayerInitialized) {
       return;
@@ -2513,6 +2585,10 @@
     // 在添加監聽器後，延遲一點點時間呼叫一次，以設定初始位置
     setTimeout(updateControlsPosition, 150); // 延遲 150 毫秒
   }
+  
+  // --- 初始化時加入全域快捷鍵監聽 ---
+  document.addEventListener('keydown', handleGlobalHotkeys);
+  console.log('[KIPSutian-autoplay] 全域快捷鍵監聽器已設定。');
 
   // --- 確保 DOM 加載完成後執行 ---
   if (
@@ -2523,4 +2599,6 @@
   } else {
     document.addEventListener('DOMContentLoaded', initialize);
   }
+
+  
 })();
